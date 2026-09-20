@@ -32,7 +32,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `config.BOT_TOKEN: str`, `config.TYPESAFE_API_KEY: str`, `config.DB_PATH: str`, `config.JEV_MODEL: str`, `config.JEV_TIMEOUT: float`, `config.OBSERVE_DAYS: int`, `config.REVIEW_TTL_DAYS: int`, `config.DEFAULT_DELETE_THRESHOLD: float`, `config.DEFAULT_REVIEW_THRESHOLD: float`, `config.DEFAULT_CONFIDENCE_FLOOR: float`, `config.DEFAULT_TRUST_AFTER: int`, `config.ENFORCEMENT_PER_MINUTE: int`.
+- Produces: `config.BOT_TOKEN: str`, `config.TYPESAFE_API_KEY: str`, `config.DB_PATH: str`, `config.JEV_MODEL: str`, `config.JEV_TIMEOUT: float`, `config.OBSERVE_DAYS: int`, `config.REVIEW_TTL_DAYS: int`, `config.DEFAULT_DELETE_THRESHOLD: float`, `config.DEFAULT_REVIEW_THRESHOLD: float`, `config.DEFAULT_CONFIDENCE_FLOOR: float`, `config.DEFAULT_TRUST_AFTER: int`, `config.RECHECK_AFTER_DAYS: int`, `config.ENFORCEMENT_PER_MINUTE: int`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -215,13 +215,22 @@ def test_ensure_chat_is_idempotent_and_updates_title():
 
 
 def test_observation_window_expires():
+    """Only an 'active' chat can leave observation, and only after the window."""
     from storage import chats
     chats.ensure_chat(-100123, "Test Group")
-    chat = chats.update_chat(-100123, observe_until="2020-01-01T00:00:00+00:00")
+    chat = chats.update_chat(
+        -100123, mode="active", observe_until="2020-01-01T00:00:00+00:00")
     assert chats.is_observing(chat) is False
 
     chat = chats.update_chat(-100123, observe_until="2999-01-01T00:00:00+00:00")
     assert chats.is_observing(chat) is True
+
+
+def test_observe_mode_ignores_an_expired_window():
+    from storage import chats
+    chats.ensure_chat(-100123, "Test Group")
+    chat = chats.update_chat(-100123, observe_until="2020-01-01T00:00:00+00:00")
+    assert chats.is_observing(chat) is True, "mode 'observe' always observes"
 
 
 def test_active_mode_still_observes_until_window_passes():
@@ -430,7 +439,7 @@ def is_observing(chat: ChatConfig) -> bool:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_chats.py -v`
-Expected: PASS, 4 passed
+Expected: PASS, 5 passed
 
 - [ ] **Step 5: Commit**
 
@@ -452,7 +461,8 @@ git commit -m "Add SQLite schema and per-chat configuration storage"
 - Produces:
   - `storage.trust.TrustRow` dataclass: `chat_id, user_id, clean_count, status, joined_at, last_checked_at, last_seen_at`. `status` is one of `unknown | trusted | flagged | allowlisted`.
   - `storage.trust.get(chat_id: int, user_id: int) -> TrustRow` — returns a default `unknown` row if absent, never `None`.
-  - `storage.trust.seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow` — upserts and refreshes `last_seen_at`.
+  - `storage.trust.seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow` — upserts and refreshes `last_seen_at`, but **returns the row as it was before this call**. Callers need the author's history *before* the current message; returning the refreshed row would make `days_since_seen` always ~0 and the 30-day re-check unreachable.
+  - `storage.trust.days_in_group(row: TrustRow) -> float | None` — from `joined_at`.
   - `storage.trust.record_clean(chat_id: int, user_id: int, trust_after: int) -> TrustRow` — increments `clean_count`, promotes `unknown` to `trusted` at the threshold, never demotes `flagged` or `allowlisted`.
   - `storage.trust.mark_flagged(chat_id: int, user_id: int) -> TrustRow`
   - `storage.trust.allowlist(chat_id: int, user_id: int) -> TrustRow`
@@ -521,6 +531,33 @@ def test_trust_is_per_chat():
     trust.seen(-100, 555)
     trust.allowlist(-100, 555)
     assert trust.get(-200, 555).status == "unknown"
+
+
+def test_seen_returns_history_before_this_message():
+    """Otherwise days_since_seen is always ~0 and the 30-day recheck is dead code."""
+    from storage import db, trust
+    trust.seen(-100, 555)
+    db.connect().execute(
+        "UPDATE trust SET last_seen_at = '2020-01-01T00:00:00+00:00' "
+        "WHERE chat_id = -100 AND user_id = 555")
+    db.connect().commit()
+
+    prior = trust.seen(-100, 555)
+    assert prior.last_seen_at == "2020-01-01T00:00:00+00:00"
+    assert trust.days_since_seen(prior) > 365
+
+    # ...and the stored row was still refreshed for next time.
+    assert trust.get(-100, 555).last_seen_at != "2020-01-01T00:00:00+00:00"
+
+
+def test_days_in_group_comes_from_joined_at():
+    from storage import db, trust
+    trust.seen(-100, 555)
+    db.connect().execute(
+        "UPDATE trust SET joined_at = '2020-01-01T00:00:00+00:00' "
+        "WHERE chat_id = -100 AND user_id = 555")
+    db.connect().commit()
+    assert trust.days_in_group(trust.get(-100, 555)) > 365
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -572,6 +609,13 @@ get = _row
 
 
 def seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow:
+    """Records that we just saw this user, and returns their history BEFORE it.
+
+    Callers judge the current message against the author's prior record. If this
+    returned the refreshed row, days_since_seen would always be ~0 and the
+    30-day re-check in core.gate could never fire.
+    """
+    prior = _row(chat_id, user_id)
     conn = db.connect()
     stamp = db.now()
     conn.execute(
@@ -583,7 +627,9 @@ def seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow:
         (chat_id, user_id, joined_at or stamp, stamp),
     )
     conn.commit()
-    return _row(chat_id, user_id)
+    if prior.joined_at is None:
+        return _row(chat_id, user_id)
+    return prior
 
 
 def _set_status(chat_id: int, user_id: int, status: str) -> TrustRow:
@@ -629,17 +675,25 @@ def allowlist(chat_id: int, user_id: int) -> TrustRow:
     return _set_status(chat_id, user_id, ALLOWLISTED)
 
 
-def days_since_seen(row: TrustRow) -> float | None:
-    if not row.last_seen_at:
+def _days_since(stamp: str | None) -> float | None:
+    if not stamp:
         return None
-    delta = datetime.now(timezone.utc) - datetime.fromisoformat(row.last_seen_at)
+    delta = datetime.now(timezone.utc) - datetime.fromisoformat(stamp)
     return delta.total_seconds() / 86400
+
+
+def days_since_seen(row: TrustRow) -> float | None:
+    return _days_since(row.last_seen_at)
+
+
+def days_in_group(row: TrustRow) -> float | None:
+    return _days_since(row.joined_at)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_trust.py -v`
-Expected: PASS, 5 passed
+Expected: PASS, 7 passed
 
 - [ ] **Step 5: Commit**
 
@@ -904,8 +958,12 @@ def test_blatant_scam_is_deleted():
 
 
 def test_grey_zone_goes_to_review():
-    grey = verdict(is_spam=0.7, severity=1, severity_confidence=0.6, looks_like_member=0.4)
+    # risk = 0.60*0.90 + 0.30*0.5 + 0.10*0.50 - 0.25*0.20 = 0.69
+    # over the 0.55 review bar, under the 0.90 delete bar.
+    grey = verdict(is_spam=0.90, severity=1, severity_confidence=0.60,
+                   solicits_contact=0.50, looks_like_member=0.20)
     d = decide(grey, DEFAULTS, **ctx())
+    assert 0.55 <= d.risk < 0.90
     assert d.action == Action.REVIEW
     assert d.reason == "grey_zone"
 
@@ -2377,6 +2435,9 @@ async def _can_delete(bot, chat_id: int) -> bool:
         me = await bot.get_chat_member(chat_id, (await bot.me()).id)
     except TelegramAPIError:
         return False
+    # An owner always can; an administrator only with the explicit right.
+    if me.status == ChatMemberStatus.CREATOR:
+        return True
     return bool(getattr(me, "can_delete_messages", False))
 
 
@@ -2391,7 +2452,7 @@ async def on_group_message(message: Message) -> None:
     facts = state.facts_from_message(
         message,
         author_message_count=row.clean_count,
-        author_days_in_group=trust.days_since_seen(row),
+        author_days_in_group=trust.days_in_group(row),
         group_description="",
     )
 
