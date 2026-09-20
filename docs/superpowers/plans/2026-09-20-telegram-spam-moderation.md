@@ -1454,7 +1454,7 @@ one and gives the policy something to combine in code.
 import asyncio
 from typing import Protocol
 
-from typesafe_sdk import Choice, Noul, Score, TypeSafeClient
+from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, Score, TypeSafeError
 
 import config
 from core.verdict import Verdict
@@ -1511,29 +1511,33 @@ class JevClient(Protocol):
 
 
 class TypeSafeJevClient:
-    """Real client. The SDK is synchronous, so the call runs in a worker thread."""
+    """Real client, over the SDK's native async interface.
+
+    Verified against the installed typesafe-sdk: AsyncTypeSafeClient takes
+    api_key/model/timeout as keyword arguments, system_one takes state and
+    questions positionally with model and timeout keyword-only, and every SDK
+    failure derives from TypeSafeError.
+    """
 
     def __init__(self, api_key: str | None = None, model: str | None = None,
                  timeout: float | None = None) -> None:
-        self._client = TypeSafeClient(api_key=api_key or config.TYPESAFE_API_KEY)
         self._model = model or config.JEV_MODEL
         self._timeout = timeout or config.JEV_TIMEOUT
+        self._client = AsyncTypeSafeClient(
+            api_key=api_key or config.TYPESAFE_API_KEY,
+            model=self._model,
+            timeout=self._timeout,
+        )
 
     async def classify(self, state: str) -> Verdict:
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._client.system_one,
-                    state=state,
-                    questions=QUESTIONS,
-                    model=self._model,
-                ),
-                timeout=self._timeout,
+            response = await self._client.system_one(
+                state, QUESTIONS, model=self._model, timeout=self._timeout,
             )
+        except TypeSafeError as exc:
+            raise JevError(f"{type(exc).__name__}: {exc}") from exc
         except asyncio.TimeoutError as exc:
             raise JevError(f"jev timed out after {self._timeout}s") from exc
-        except Exception as exc:  # SDK and transport errors alike
-            raise JevError(str(exc)) from exc
         return self._to_verdict(response)
 
     @staticmethod
