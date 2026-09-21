@@ -57,7 +57,22 @@ async def on_group_message(message: Message) -> None:
         group_description="",
     )
 
-    is_admin = await guards.is_admin(message.bot, message.chat.id, message.from_user.id)
+    # This is the only place in the bot where the answer to "is this an
+    # admin?" decides whether somebody gets acted upon rather than whether
+    # they get handed control of something. A failed lookup here must
+    # therefore not read as "ordinary member": that would turn a transient
+    # Telegram error into a deletion aimed at a possible administrator,
+    # against the one guard the spec says cannot be configured away. The
+    # message is dropped instead - unchecked, unclassified, with no API call
+    # spent - which is the spec's rule that uncertainty resolves to not
+    # acting. A message lost to an outage is recoverable; a deleted admin
+    # post is not.
+    check = await guards.admin_check(message.bot, message.chat.id, message.from_user.id)
+    if check is guards.AdminCheck.UNKNOWN:
+        log.warning("admin status unknown for user %s in chat %s, skipping message",
+                    message.from_user.id, message.chat.id)
+        return
+    is_admin = check is guards.AdminCheck.ADMIN
     can_delete = await _can_delete(message.bot, message.chat.id)
 
     outcome = await pipeline.evaluate(

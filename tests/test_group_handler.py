@@ -6,6 +6,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import DeleteMessage, GetChatMember, GetMe, SendMessage
 from aiogram.types import Chat, ChatMemberMember, ChatMemberOwner, Message, Update, User
 
@@ -15,6 +16,9 @@ from tests.fixtures.verdicts import CHATTER, SCAM
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 GROUP, SPAMMER, LOG = -100123, 555, -100999
 calls: list = []
+# User ids whose get_chat_member call fake_call should fail, standing in for
+# a transient Telegram error on the admin lookup.
+unreachable: set = set()
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +32,7 @@ def fresh(monkeypatch):
     from storage import db
     db.reset()
     calls.clear()
+    unreachable.clear()
     # Bot.__call__ is a single class attribute shared by every test module
     # that patches it. pytest imports (collects) all test files before
     # running any test, so whichever module was imported last would win for
@@ -55,6 +60,8 @@ async def fake_call(self, method, request_timeout=None):
         return Message(message_id=9001, date=NOW,
                        chat=Chat(id=method.chat_id, type="supergroup"), text=method.text)
     if isinstance(method, GetChatMember):
+        if method.user_id in unreachable:
+            raise TelegramNetworkError(method=method, message="lookup failed")
         if method.user_id == SPAMMER:
             return ChatMemberMember(
                 user=User(id=SPAMMER, is_bot=False, first_name="Ann"), status="member")
@@ -147,3 +154,31 @@ async def test_review_row_is_created_for_the_card():
     rows = db.connect().execute("SELECT * FROM reviews").fetchall()
     assert len(rows) == 1
     assert rows[0]["text"] == "buy crypto now"
+
+
+async def test_failed_admin_lookup_never_acts_on_a_possible_admin():
+    """A transient get_chat_member failure must not downgrade a possible
+    admin to an ordinary member for this message.
+
+    Production edit this catches: making guards.admin_check return
+    AdminCheck.NOT_ADMIN (the old `return False`) on TelegramAPIError, or
+    dropping the UNKNOWN branch in on_group_message. Either one classifies
+    this message and deletes it, since SCAM clears the delete band.
+    """
+    unreachable.add(SPAMMER)
+    client = FakeJevClient({"buy crypto": SCAM})
+    await feed(group_message("buy crypto now"), client)
+    assert deletions() == [], "a user whose admin status is unknown is not acted upon"
+    assert cards_to(LOG) == []
+    assert client.calls == [], "an unknown admin status costs no classifier call either"
+
+
+async def test_a_reachable_lookup_still_acts():
+    """The paired positive case: the same message, same fixtures, with the
+    lookup working. Without this, the test above would also pass if
+    on_group_message stopped acting on anything at all.
+    """
+    client = FakeJevClient({"buy crypto": SCAM})
+    await feed(group_message("buy crypto now"), client)
+    assert len(deletions()) == 1
+    assert client.calls

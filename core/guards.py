@@ -15,11 +15,30 @@ kind of code that must not drift:
 """
 import logging
 import sqlite3
+from enum import Enum
 
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramAPIError
 
+log = logging.getLogger("stopspam.guards")
+
 ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+
+
+class AdminCheck(str, Enum):
+    """The three honest answers to "does this user administer this chat?"
+
+    UNKNOWN exists because Telegram can simply fail to answer, and the two
+    kinds of caller want opposite things from that failure. A caller deciding
+    whether to *act on* a user must not read a failed lookup as "ordinary
+    member"; a caller deciding whether to *grant* someone control must not
+    read it as "administrator". Collapsing the failure into a bool inside this
+    module would silently pick one of those for both.
+    """
+
+    ADMIN = "admin"
+    NOT_ADMIN = "not_admin"
+    UNKNOWN = "unknown"
 
 
 def best_effort(log: logging.Logger, what: str, chat_id: int, fn, *args, **kwargs):
@@ -46,14 +65,32 @@ def best_effort(log: logging.Logger, what: str, chat_id: int, fn, *args, **kwarg
         return None
 
 
-async def is_admin(bot, chat_id: int, user_id: int) -> bool:
-    """True when the user administers or owns the chat, per Telegram right now.
+async def admin_check(bot, chat_id: int, user_id: int) -> AdminCheck:
+    """Asks Telegram whether the user administers or owns the chat, right now.
 
     Never reads a cached value: a stale row in our own database must not be
     enough to grant control over a group's moderation.
+
+    A Telegram failure returns UNKNOWN rather than a guess. The spec's
+    governing rule is that any uncertainty resolves to not acting, and a
+    transient API error is exactly that uncertainty.
     """
     try:
         member = await bot.get_chat_member(chat_id, user_id)
-    except TelegramAPIError:
-        return False
-    return member.status in ADMIN_STATUSES
+    except TelegramAPIError as exc:
+        log.warning("admin lookup failed for user %s in chat %s: %s",
+                    user_id, chat_id, exc)
+        return AdminCheck.UNKNOWN
+    return AdminCheck.ADMIN if member.status in ADMIN_STATUSES else AdminCheck.NOT_ADMIN
+
+
+async def is_admin(bot, chat_id: int, user_id: int) -> bool:
+    """True only when Telegram positively confirms the user is an admin.
+
+    Use this where a False *denies* something - a settings menu, a review-card
+    button - so that a failed lookup fails closed. Do NOT use it to decide
+    whether a user may be acted upon: there a False permits the action, and a
+    failed lookup would turn a possible admin into an ordinary member.
+    Call admin_check() and handle UNKNOWN explicitly for that.
+    """
+    return await admin_check(bot, chat_id, user_id) is AdminCheck.ADMIN
