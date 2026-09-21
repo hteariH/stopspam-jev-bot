@@ -60,12 +60,44 @@ CREATE TABLE IF NOT EXISTS audit (
   created_at TEXT NOT NULL
 );
 
+-- Billing state per chat. Separate from `chats` so the moderation config and
+-- the money stay independently readable, and so this table can be dropped
+-- without touching a single moderation setting.
+CREATE TABLE IF NOT EXISTS billing (
+  chat_id         INTEGER PRIMARY KEY,
+  member_count    INTEGER,
+  member_count_at TEXT,
+  grace_until     TEXT,
+  paid_until      TEXT,
+  payer_user_id   INTEGER,
+  stars           INTEGER,
+  charge_id       TEXT,
+  notified_stage  TEXT,
+  updated_at      TEXT    NOT NULL
+);
+
+-- Append-only. Telegram sends no "payment revoked" update, so this is the
+-- only record that will exist when a charge is disputed or when
+-- refundStarPayment has to be called by hand. Nothing deletes from it and
+-- nothing updates it. The charge id is the primary key because that is what
+-- makes a redelivered update harmless.
+CREATE TABLE IF NOT EXISTS payments (
+  telegram_payment_charge_id TEXT PRIMARY KEY,
+  chat_id       INTEGER NOT NULL,
+  payer_user_id INTEGER NOT NULL,
+  stars         INTEGER NOT NULL,
+  is_recurring  INTEGER NOT NULL DEFAULT 0,
+  expires_at    TEXT,
+  created_at    TEXT    NOT NULL
+);
+
 -- The trust primary key is (chat_id, user_id), so "which chats has this
 -- user been seen in" - the candidate set behind /chats - would otherwise be
 -- a full scan of every member of every group the bot is in.
 CREATE INDEX IF NOT EXISTS idx_trust_user ON trust (user_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_chat ON reviews (chat_id, decided_at);
 CREATE INDEX IF NOT EXISTS idx_audit_chat ON audit (chat_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_payments_chat ON payments (chat_id, created_at);
 """
 
 
