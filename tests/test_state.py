@@ -109,36 +109,48 @@ def test_facts_handle_multiple_malformed_urls():
     assert len(extracted.link_domains) == 2
 
 
-def test_facts_handle_stray_bracket():
-    """Stray closing bracket in URL should not crash."""
+def test_facts_handle_unclosed_ipv6_bracket():
+    """Unclosed IPv6 bracket should not crash extraction.
+
+    This tests a different bracket pattern: http://[invalid/path
+    which raises ValueError in urlparse() due to unclosed IPv6 literal.
+    Without the try/except in _domain(), extraction would crash.
+    """
     message = Message(
         message_id=5, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
         from_user=User(id=5, is_bot=False, first_name="Grace"),
-        text="check this://weird]url/path",
+        text="click http://[invalid/path here",
     )
     extracted = facts_from_message(
         message, author_message_count=0, author_days_in_group=0.0,
         group_description="",
     )
-    # Should return normally
-    assert extracted is not None
-    assert isinstance(extracted.link_domains, tuple)
+    # URL matched by regex but urlparse raises on unclosed [
+    assert extracted.link_count == 1
+    # Domain parsing failed, filtered out
+    assert extracted.link_domains == ()
 
 
-def test_facts_handle_very_long_url():
-    """Very long malformed URL should not crash extraction."""
+def test_facts_handle_empty_ipv6_bracket():
+    """Empty IPv6 literal bracket should not crash extraction.
+
+    URL: http://[]empty
+    The [] is an empty/degenerate IPv6 literal that raises ValueError on parse.
+    This tests the try/except in _domain() against a different bracket pattern.
+    """
     message = Message(
         message_id=6, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
         from_user=User(id=5, is_bot=False, first_name="Henry"),
-        text="see http://[" + "x" * 10000 + "/malformed",
+        text="visit http://[]empty/notvalid",
     )
     extracted = facts_from_message(
         message, author_message_count=0, author_days_in_group=0.0,
         group_description="",
     )
-    # Should return normally even with very long garbage
-    assert extracted is not None
-    assert isinstance(extracted.link_count, int)
+    # URL matched by regex but urlparse raises on empty IPv6 literal []
+    assert extracted.link_count == 1
+    # Domain parsing failed, filtered out
+    assert extracted.link_domains == ()
 
 
 def test_facts_cap_group_title_at_128_chars():
