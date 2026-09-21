@@ -136,3 +136,28 @@ def test_ukrainian_card_renders_with_ukrainian_labels():
 
     labels = [b.text for row in card_keyboard(1, "uk").inline_keyboard for b in row]
     assert labels == [t("btn_ban", "uk"), t("btn_delete", "uk"), t("btn_not_spam", "uk")]
+
+
+def test_invoice_title_fits_telegrams_32_character_limit_in_every_language():
+    """createInvoiceLink rejects a title over 32 characters outright, which
+    would make the product unbuyable in that language only - exactly the kind
+    of failure nobody notices until a Ukrainian admin tries to pay."""
+    from texts import t
+    for lang in ("en", "ru", "uk"):
+        assert 1 <= len(t("invoice_title", lang)) <= 32, lang
+
+
+def test_every_new_billing_key_exists_in_every_language():
+    from texts import STRINGS
+    keys = [
+        "card_not_entitled", "btn_subscribe", "menu_billing", "billing_free",
+        "billing_subscribed", "billing_grace", "billing_none",
+        "btn_start_deleting", "invoice_title", "invoice_description",
+        "invoice_label", "pay_thanks", "pay_cancel_hint", "pay_rejected",
+        "pay_unrecorded", "invoice_unavailable", "notice_grace",
+        "notice_grace_ending", "notice_lapsed",
+    ]
+    for key in keys:
+        assert key in STRINGS, key
+        assert set(STRINGS[key]) == {"en", "ru", "uk"}, key
+        assert all(STRINGS[key][lang].strip() for lang in ("en", "ru", "uk")), key
