@@ -1,0 +1,134 @@
+name: CI & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Create a throwaway .env for the image build
+        # docker-compose.yml declares env_file: .env, so docker compose
+        # refuses to even parse the config without one. These values are
+        # never used for anything but the import check below.
+        run: |
+          echo "BOT_TOKEN=ci-build-placeholder" > .env
+          echo "TYPESAFE_API_KEY=ci-build-placeholder" >> .env
+
+      - name: Build the image
+        run: docker compose build
+
+      - name: Verify the image can import the bot
+        # bot.py's main() exits without a real TYPESAFE_API_KEY, so this
+        # imports the module instead of running it - it still fails loudly
+        # on a missing package directory (core/handlers/storage), which is
+        # the failure mode a partial COPY list would otherwise hide until
+        # the deploy's running-container check, after a push and an scp.
+        run: docker compose run --rm --entrypoint python bot -c "import bot"
+
+  deploy:
+    name: Deploy to VPS
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Until the secrets are set, the deploy reports itself skipped instead of failing.
+      - name: Check secrets
+        id: secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          missing=""
+          for name in VPS_HOST SSH_USERNAME SSH_PASSWORD BOT_TOKEN TYPESAFE_API_KEY; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped — missing secrets:$missing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Copy sources to the server
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "*.py,requirements.txt,Dockerfile,docker-compose.yml,core,handlers,storage"
+          target: ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
+          overwrite: true
+
+      - name: Rebuild and restart the container
+        if: steps.secrets.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD || secrets.SSH_PASSWORD }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: BOT_TOKEN,TYPESAFE_API_KEY,SUDO_PASSWORD
+          script_stop: true
+          script: |
+            cd ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
+            umask 077
+            cat > .env <<ENVFILE
+            BOT_TOKEN=$BOT_TOKEN
+            TYPESAFE_API_KEY=$TYPESAFE_API_KEY
+            DB_PATH=/data/stopspam.db
+            ENVFILE
+
+            # The SSH user may not be in the docker group; fall back to sudo with the same password.
+            if docker info >/dev/null 2>&1; then
+              DOCKER="docker"
+            elif echo "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1; then
+              DOCKER="sudo docker"
+              echo "note: docker needs sudo here; add the user to the docker group to skip it"
+            else
+              echo "no access to the docker daemon: user is not in the docker group and sudo failed" >&2
+              exit 1
+            fi
+
+            $DOCKER compose up -d --build
+            $DOCKER image prune -f
+
+            # Give the bot time to reach Telegram, then prove it is actually up.
+            sleep 15
+            $DOCKER compose ps
+            echo "----- bot log -----"
+            $DOCKER compose logs --tail 30 2>&1 || true
+            echo "-------------------"
+
+            if [ -z "$($DOCKER compose ps -q --status running)" ]; then
+              echo "the bot container is not running after deploy" >&2
+              exit 1
+            fi
