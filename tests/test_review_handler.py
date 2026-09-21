@@ -80,11 +80,15 @@ def make_review() -> int:
 
 
 def press(action: str, review_id: int, by: int = ADMIN) -> Update:
+    return press_raw(f"rv:{action}:{review_id}", by=by)
+
+
+def press_raw(data: str, by: int = ADMIN) -> Update:
     card = Message(message_id=9001, date=NOW, chat=Chat(id=LOG, type="supergroup"),
                    text="card")
     query = CallbackQuery(
         id="q1", from_user=User(id=by, is_bot=False, first_name="Boss"),
-        chat_instance="ci", message=card, data=f"rv:{action}:{review_id}",
+        chat_instance="ci", message=card, data=data,
     )
     return Update(update_id=1, callback_query=query)
 
@@ -122,13 +126,18 @@ async def test_delete_removes_the_message():
 
 
 async def test_ban_deletes_and_bans():
-    from storage import reviews
+    from storage import reviews, trust
     rid = make_review()
     await feed(press("ban", rid))
     assert [c for c in calls if isinstance(c, DeleteMessage)]
     banned = [c for c in calls if isinstance(c, BanChatMember)]
     assert banned and banned[0].user_id == SPAMMER
     assert reviews.get(rid)["decision"] == "delete_ban"
+    # A banned author must also be marked flagged in the trust ledger - this
+    # is the write that keeps them from ever being silently re-trusted, and
+    # it is easy to lose in a refactor since nothing else in this test
+    # touches it.
+    assert trust.get(GROUP, SPAMMER).status == "flagged"
 
 
 async def test_non_admin_press_changes_nothing():
@@ -148,7 +157,61 @@ async def test_second_press_is_refused():
     assert not [c for c in calls if isinstance(c, BanChatMember)]
 
 
+async def test_concurrent_presses_only_one_wins():
+    """Two overlapping presses on the same review must not both act.
+
+    The handler has an await point (the admin verification against
+    Telegram) between reading "review is unresolved" and atomically
+    claiming it. This simulates a second admin's press landing in exactly
+    that window: by the time this press's own admin check returns, the
+    review has already been resolved by someone else. reviews.resolve()'s
+    atomic claim must then fail for this press, and none of its destructive
+    actions (ban, delete) may run - the racer's decision must stand
+    untouched, not be overwritten by whichever call happens to finish last.
+    """
+    from storage import reviews
+    rid = make_review()
+
+    async def racing_call(self, method, request_timeout=None):
+        if isinstance(method, GetChatMember) and method.user_id == ADMIN:
+            reviews.resolve(rid, "delete", decided_by=999)
+        return await fake_call(self, method, request_timeout)
+
+    Bot.__call__ = racing_call
+    await feed(press("ban", rid))
+
+    assert reviews.get(rid)["decision"] == "delete", "the racer's decision must not be overwritten"
+    assert reviews.get(rid)["decided_by"] == 999
+    assert not [c for c in calls if isinstance(c, BanChatMember)]
+    assert not [c for c in calls if isinstance(c, DeleteMessage)]
+    assert answers(), "the losing press must still get an answer, not a hanging spinner"
+
+
 async def test_card_is_edited_to_show_the_outcome():
+    from texts import t
     rid = make_review()
     await feed(press("del", rid))
-    assert [c for c in calls if isinstance(c, EditMessageText)]
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert edits
+    assert t("done_delete", "en") in edits[0].text
+
+
+async def test_callback_data_missing_id_is_answered_not_crashed():
+    await feed(press_raw("rv:ban"))
+    assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
+    assert answers()
+
+
+async def test_callback_data_non_numeric_id_is_answered_not_crashed():
+    await feed(press_raw("rv:ban:abc"))
+    assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
+    assert answers()
+
+
+async def test_unknown_verb_is_answered_not_crashed():
+    from storage import reviews
+    rid = make_review()
+    await feed(press_raw(f"rv:xyz:{rid}"))
+    assert reviews.get(rid)["decision"] is None
+    assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
+    assert answers()

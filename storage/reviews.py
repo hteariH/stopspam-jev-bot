@@ -27,13 +27,25 @@ def get(review_id: int) -> sqlite3.Row | None:
     ).fetchone()
 
 
-def resolve(review_id: int, decision: str, decided_by: int) -> None:
+def resolve(review_id: int, decision: str, decided_by: int) -> bool:
+    """Claims and resolves a review, but only if nobody has resolved it yet.
+
+    The `decision IS NULL` clause makes this an atomic compare-and-set: two
+    overlapping callers (a double-tap, two admins racing on the same card)
+    can both read a review with `decision IS NULL` before either writes, but
+    only one UPDATE can match this WHERE clause once the other has
+    committed. The return value tells the caller whether *it* was the one
+    that won the claim, so a caller can gate its destructive side effects on
+    actually owning the review rather than merely having seen it unresolved.
+    """
     conn = db.connect()
-    conn.execute(
-        "UPDATE reviews SET decision = ?, decided_by = ?, decided_at = ? WHERE id = ?",
+    cursor = conn.execute(
+        """UPDATE reviews SET decision = ?, decided_by = ?, decided_at = ?
+           WHERE id = ? AND decision IS NULL""",
         (decision, decided_by, db.now(), review_id),
     )
     conn.commit()
+    return cursor.rowcount > 0
 
 
 def purge_expired() -> int:

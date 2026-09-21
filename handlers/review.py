@@ -51,10 +51,27 @@ async def _is_admin(bot, chat_id: int, user_id: int) -> bool:
 
 @router.callback_query(F.data.startswith("rv:"))
 async def on_card_button(query: CallbackQuery) -> None:
-    _, action, raw_id = query.data.split(":", 2)
-    review_id = int(raw_id)
+    # A client can send arbitrary callback data - the "rv:" prefix filter
+    # above does not guarantee a well-formed action or a numeric id. None of
+    # these shapes correspond to anything actionable, so the honest answer
+    # is the same "already handled" a stale/unknown review id gets below;
+    # the point is that every path answers the query and none of them raise.
+    parts = query.data.split(":", 2)
+    if len(parts) != 3 or parts[1] not in _DECISION:
+        await query.answer(t("already_handled"))
+        return
+    _, action, raw_id = parts
+    try:
+        review_id = int(raw_id)
+    except ValueError:
+        await query.answer(t("already_handled"))
+        return
 
-    review = _best_effort("get_review", review_id, reviews.get, review_id)
+    try:
+        review = reviews.get(review_id)
+    except sqlite3.Error as exc:
+        log.warning("storage call failed (get_review) for review %s: %s", review_id, exc)
+        review = None
     if review is None:
         # Either the id never existed, or the lookup itself failed. Either
         # way there is nothing left to act on, and "already handled" is the
@@ -73,14 +90,38 @@ async def on_card_button(query: CallbackQuery) -> None:
         await query.answer(t("not_admin", lang), show_alert=True)
         return
 
+    # Claim the review before doing anything destructive. reviews.resolve()
+    # only succeeds (returns True) for whichever caller's UPDATE lands first
+    # against a still-unresolved row, so this is the point that makes two
+    # overlapping presses on the same review - a double-tap, or two admins
+    # racing on the same card - safe: everyone who arrives after the first
+    # successful claim gets `False` here and stops, instead of both racers
+    # reading "unresolved", both passing the admin check above, and both
+    # running the delete/ban. A storage failure (caught by _best_effort,
+    # returning None) is treated the same as losing the race: fail closed
+    # rather than perform a destructive action with no record of it.
+    #
+    # This does mean the review can end up marked resolved even if the
+    # delete or ban below then fails against Telegram - the admin still
+    # sees the normal "done" outcome and the edited card, with only a
+    # warning in the logs. That is the trade decision 4 already makes for
+    # this task: a Telegram failure must not abort the bookkeeping, and a
+    # card that looks unhandled forever is worse than one that is a beat
+    # behind Telegram.
+    claimed = _best_effort("resolve", review["chat_id"], reviews.resolve,
+                           review_id, _DECISION[action], query.from_user.id)
+    if not claimed:
+        await query.answer(t("already_handled", lang))
+        return
+
     if action in ("ban", "del"):
         try:
             await query.bot.delete_message(review["chat_id"], review["message_id"])
         except TelegramAPIError as exc:
             # The message may already be gone (another admin, the user
-            # themself, or a prior failed retry). The admin's decision still
-            # needs to be recorded either way - a card that looks unhandled
-            # forever is worse than one that's a beat behind Telegram.
+            # themself, or a prior failed retry). The review is already
+            # claimed and resolved above, so this failure only affects
+            # Telegram state, never whether the decision gets recorded.
             log.warning("delete from card failed for chat %s: %s", review["chat_id"], exc)
     if action == "ban":
         try:
@@ -93,14 +134,6 @@ async def on_card_button(query: CallbackQuery) -> None:
         _best_effort("allowlist", review["chat_id"], trust.allowlist,
                      review["chat_id"], review["user_id"])
 
-    # resolve() is what makes a second press a no-op (the check above reads
-    # review["decision"]), so it is the storage write that matters most to
-    # land here. It runs before the audit line, which is bookkeeping only -
-    # duplicating an audit row on a rare double press is harmless, but a
-    # review that never resolves would let the same message be re-actioned
-    # indefinitely.
-    _best_effort("resolve", review["chat_id"], reviews.resolve,
-                 review_id, _DECISION[action], query.from_user.id)
     _best_effort("audit", review["chat_id"], audit.record,
                  review["chat_id"], review["user_id"], review["message_id"],
                  review["risk"], f"card_{action}", f"by_admin_{query.from_user.id}")
