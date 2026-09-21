@@ -58,13 +58,18 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           missing=""
-          for name in VPS_HOST SSH_USERNAME SSH_PRIVATE_KEY BOT_TOKEN TYPESAFE_API_KEY; do
+          for name in VPS_HOST SSH_USERNAME BOT_TOKEN TYPESAFE_API_KEY; do
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
+          # Either credential works; appleboy's actions prefer the key when both are set.
+          if [ -z "$SSH_PRIVATE_KEY" ] && [ -z "$SSH_PASSWORD" ]; then
+            missing="$missing SSH_PRIVATE_KEY-or-SSH_PASSWORD"
+          fi
           if [ -n "$missing" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "### Deploy skipped — missing secrets:$missing" >> "$GITHUB_STEP_SUMMARY"
@@ -79,6 +84,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: "*.py,requirements.txt,Dockerfile,docker-compose.yml,core,handlers,storage"
           target: ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
@@ -90,11 +96,12 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD || secrets.SSH_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
           envs: BOT_TOKEN,TYPESAFE_API_KEY,SUDO_PASSWORD
           script_stop: true
