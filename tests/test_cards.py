@@ -68,16 +68,19 @@ def test_card_in_russian():
 
 
 def test_card_worst_case_length():
-    """All fields at max length with < characters (escape quadruples them).
-    With MAX_TITLE=128, MAX_NAME=128, MAX_QUOTE=500, worst case should stay
-    comfortably under 4096 (Telegram limit) with real headroom."""
+    """All three truncation branches fire: each field one character over cap.
+    With MAX_TITLE=128, MAX_NAME=128, MAX_QUOTE=500, inputs of 129/129/501
+    trigger truncation. Each truncation appends "…", verified by count.
+    Worst case should stay under 4096 (Telegram limit) with real margin."""
     body = render_card(
         decision=Decision(Action.REVIEW, 0.99, "no_delete_permission"),
         verdict=SCAM,
-        author_name="<" * 128,
+        author_name="<" * 129,  # One over MAX_NAME
         author_id=9999999999,
-        text="<" * 500,
-        chat_title="<" * 128,
+        text="<" * 501,  # One over MAX_QUOTE
+        chat_title="<" * 129,  # One over MAX_TITLE
         lang="en",
     )
     assert len(body) < 4096, f"Card length {len(body)} exceeds Telegram limit"
+    # All three truncation branches fire, each appending "…"
+    assert body.count("…") == 3, f"Expected 3 ellipsis marks from truncations, got {body.count('…')}"
