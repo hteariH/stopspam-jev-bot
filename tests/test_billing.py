@@ -60,3 +60,149 @@ def test_tier_constants_match_the_spec():
 def test_subscription_period_is_the_only_value_the_bot_api_accepts():
     import config
     assert config.SUBSCRIPTION_PERIOD == 2592000
+
+
+# --- the billing row ---
+
+def test_an_unknown_chat_reads_as_an_empty_row_not_none():
+    """Callers on the moderation path must not have to branch on None."""
+    from storage import billing
+    row = billing.get(-100999)
+    assert row.chat_id == -100999
+    assert row.member_count is None
+    assert row.paid_until is None
+    assert row.grace_until is None
+    assert row.notified_stage is None
+
+
+def test_empty_is_what_a_caller_falls_back_to_when_the_read_fails():
+    from storage import billing
+    assert billing.empty(-100123) == billing.get(-100123)
+
+
+def test_member_count_round_trips():
+    from storage import billing
+    billing.set_member_count(-100123, 640)
+    row = billing.get(-100123)
+    assert row.member_count == 640
+    assert row.member_count_at is not None
+
+
+def test_member_count_updates_in_place():
+    from storage import billing
+    billing.set_member_count(-100123, 640)
+    billing.set_member_count(-100123, 1200)
+    assert billing.get(-100123).member_count == 1200
+
+
+# --- grace is written once, ever ---
+
+def test_start_grace_writes_a_future_timestamp():
+    from datetime import datetime, timezone
+    from storage import billing
+    value = billing.start_grace(-100123)
+    assert datetime.fromisoformat(value) > datetime.now(timezone.utc)
+    assert billing.get(-100123).grace_until == value
+
+
+def test_start_grace_never_overwrites_an_existing_window():
+    """A group oscillating around 200 members must not farm free trials."""
+    from storage import billing
+    first = billing.start_grace(-100123)
+    second = billing.start_grace(-100123)
+    assert second == first
+    assert billing.get(-100123).grace_until == first
+
+
+def test_start_grace_preserves_a_member_count_already_recorded():
+    from storage import billing
+    billing.set_member_count(-100123, 640)
+    billing.start_grace(-100123)
+    assert billing.get(-100123).member_count == 640
+
+
+# --- the ledger ---
+
+def test_recording_a_payment_credits_the_chat_and_returns_true():
+    from storage import billing
+    assert billing.record_payment(
+        charge_id="ch_1", chat_id=-100123, payer_user_id=7, stars=50,
+        is_recurring=False, expires_at="2026-10-21T12:00:00+00:00") is True
+    row = billing.get(-100123)
+    assert row.paid_until == "2026-10-21T12:00:00+00:00"
+    assert row.payer_user_id == 7
+    assert row.stars == 50
+    assert row.charge_id == "ch_1"
+
+
+def test_a_redelivered_payment_is_ignored_and_grants_nothing():
+    """Telegram can redeliver an update. Without this guard one payment would
+    grant sixty days."""
+    from storage import billing
+    billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=False,
+                           expires_at="2026-10-21T12:00:00+00:00")
+    assert billing.record_payment(
+        charge_id="ch_1", chat_id=-100123, payer_user_id=7, stars=50,
+        is_recurring=False, expires_at="2026-11-21T12:00:00+00:00") is False
+    assert billing.get(-100123).paid_until == "2026-10-21T12:00:00+00:00"
+
+
+def test_a_renewal_has_its_own_charge_id_and_extends_the_subscription():
+    from storage import billing
+    billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=False,
+                           expires_at="2026-10-21T12:00:00+00:00")
+    assert billing.record_payment(
+        charge_id="ch_2", chat_id=-100123, payer_user_id=7, stars=50,
+        is_recurring=True, expires_at="2026-11-21T12:00:00+00:00") is True
+    assert billing.get(-100123).paid_until == "2026-11-21T12:00:00+00:00"
+
+
+def test_every_payment_lands_in_the_ledger():
+    from storage import billing, db
+    billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=False, expires_at="2026-10-21T12:00:00+00:00")
+    billing.record_payment(charge_id="ch_2", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=True, expires_at="2026-11-21T12:00:00+00:00")
+    rows = db.connect().execute(
+        "SELECT telegram_payment_charge_id, is_recurring FROM payments "
+        "WHERE chat_id = ? ORDER BY created_at, telegram_payment_charge_id", (-100123,)
+    ).fetchall()
+    assert [r["telegram_payment_charge_id"] for r in rows] == ["ch_1", "ch_2"]
+    assert [r["is_recurring"] for r in rows] == [0, 1]
+
+
+def test_paying_does_not_consume_the_grace_window():
+    """Grace is set once, ever - a payment must not clear it, or cancelling
+    would hand back a second free trial."""
+    from storage import billing
+    grace = billing.start_grace(-100123)
+    billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=False, expires_at="2026-10-21T12:00:00+00:00")
+    assert billing.get(-100123).grace_until == grace
+
+
+def test_a_payment_for_a_chat_the_bot_has_never_seen_is_still_recorded():
+    """Money moved. The record is not optional."""
+    from storage import billing
+    assert billing.record_payment(
+        charge_id="ch_9", chat_id=-100777, payer_user_id=7, stars=250,
+        is_recurring=False, expires_at="2026-10-21T12:00:00+00:00") is True
+    assert billing.get(-100777).paid_until == "2026-10-21T12:00:00+00:00"
+
+
+# --- notice stages ---
+
+def test_notified_stage_round_trips():
+    from storage import billing
+    billing.set_notified_stage(-100123, "grace")
+    assert billing.get(-100123).notified_stage == "grace"
+
+
+def test_a_payment_clears_the_notice_stage_so_a_later_lapse_is_announced():
+    from storage import billing
+    billing.set_notified_stage(-100123, "lapsed")
+    billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                           stars=50, is_recurring=False, expires_at="2026-10-21T12:00:00+00:00")
+    assert billing.get(-100123).notified_stage is None
