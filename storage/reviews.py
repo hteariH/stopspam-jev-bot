@@ -1,9 +1,41 @@
 """Grey-zone queue. Text expires after the TTL; the human label does not."""
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import config
 from storage import db
+
+log = logging.getLogger("stopspam.reviews")
+
+
+def _purge_on_the_way_past() -> None:
+    """Erases expired text whenever new text is stored.
+
+    purge_expired() is the only thing that erases stored message text, and
+    until now the only thing that called it was one unsupervised task in
+    bot.py. That task is not awaited and is not restarted when it dies from
+    something its own sqlite3.Error guard does not catch - while the bot
+    keeps running and keeps storing text. The 7-day erasure promised in
+    README.md and behind /privacy would then quietly stop being true, with
+    nothing but a log line to say so.
+
+    Tying the purge to create() ties erasure to the event that creates the
+    debt: no new message text is stored without expired text being cleared
+    in the same call, whatever became of the hourly loop. The loop stays as
+    the mechanism that erases text in a quiet group, where nothing new is
+    being written to trigger this.
+
+    A failure here must not lose the review row that was just written, so it
+    is logged rather than raised; the hourly loop will try again.
+    """
+    try:
+        cleared = purge_expired()
+    except sqlite3.Error as exc:
+        log.warning("opportunistic purge failed: %s", exc)
+        return
+    if cleared:
+        log.info("purged text from %s expired reviews", cleared)
 
 
 def create(chat_id: int, message_id: int, user_id: int, text: str | None,
@@ -18,7 +50,9 @@ def create(chat_id: int, message_id: int, user_id: int, text: str | None,
         (chat_id, message_id, user_id, text, verdict_json, risk, db.now(), expires),
     )
     conn.commit()
-    return cursor.lastrowid
+    review_id = cursor.lastrowid
+    _purge_on_the_way_past()
+    return review_id
 
 
 def get(review_id: int) -> sqlite3.Row | None:

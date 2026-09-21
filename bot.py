@@ -70,6 +70,12 @@ def _report_housekeeping_death(task: asyncio.Task) -> None:
     deliberate choice: a housekeeping loop that failed on something other
     than a storage error hit a bug worth looking at, not a transient
     condition worth silently retrying forever.
+
+    What makes that choice safe is that the 7-day erasure no longer depends
+    on this task alone: storage.reviews.create() purges expired text on its
+    way past, so no new message text is stored without expired text being
+    cleared in the same call. This loop is what erases text in a group that
+    has gone quiet, where nothing new is being written to trigger that.
     """
     if task.cancelled():
         return

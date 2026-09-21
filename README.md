@@ -111,9 +111,11 @@ from anyone an admin has marked as not spam, nor messages with neither text
 nor a caption (joins, pins, photos with no caption).
 
 Message text is stored in the review queue for at most 7 days and then
-erased automatically (`bot.py` runs an hourly housekeeping pass that clears
-expired text); the human decision recorded against it is kept, but not the
-text itself. The audit log the bot keeps for every evaluation never stores
+erased automatically. Two things do that erasing, so it does not rest on one
+of them: storing new message text clears any expired text in the same call,
+and `bot.py` runs an hourly housekeeping pass for groups that have gone quiet
+and are writing nothing new. The human decision recorded against a message is
+kept, but not the text itself. The audit log the bot keeps for every evaluation never stores
 message text at all.
 
 Any admin can turn classification off for their chat at any time with
