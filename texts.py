@@ -95,6 +95,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Thresholds",
         "ru": "Пороги",
     },
+    "menu_delete_threshold": {
+        "en": "delete",
+        "ru": "удаление",
+    },
+    "menu_review_threshold": {
+        "en": "review",
+        "ru": "проверка",
+    },
     "menu_log_chat": {
         "en": "Log chat",
         "ru": "Чат для журнала",

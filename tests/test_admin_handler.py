@@ -6,6 +6,7 @@ import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import (AnswerCallbackQuery, EditMessageText, GetChatMember,
                              GetMe, SendMessage)
 from aiogram.types import (CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberMember,
@@ -56,6 +57,14 @@ async def fake_call(self, method, request_timeout=None):
     if isinstance(method, GetMe):
         return User(id=1, is_bot=True, first_name="StopSpam", username="StopSpam_jev_bot")
     if isinstance(method, SendMessage):
+        # Telegram's HTML parse mode only understands a fixed set of tags
+        # (b, i, code, ...). "<chat>" is not one of them, so a real send of
+        # an unescaped group title containing it would be rejected with
+        # exactly this error - this simulates that rejection so a handler
+        # that forgets to escape user-controlled text is caught here rather
+        # than only in production.
+        if "<chat>" in (method.text or ""):
+            raise TelegramBadRequest(method=method, message="Bad Request: can't parse entities")
         return Message(message_id=1, date=NOW, chat=Chat(id=method.chat_id, type="private"),
                        text=method.text)
     if isinstance(method, GetChatMember):
@@ -110,7 +119,13 @@ async def test_privacy_command_names_the_third_party_and_retention():
 
 async def test_start_greets_in_english():
     await feed(dm("/start"))
-    assert sent()[-1].text
+    text = sent()[-1].text
+    # Specific enough that the wrong string, the wrong key (t() falls back
+    # to returning the bare key itself for an unknown one) or the Russian
+    # translation (written in Cyrillic, so it never contains "spam") would
+    # all fail this, unlike a bare truthiness check.
+    assert "spam" in text.lower()
+    assert "/chats" in text
 
 
 async def test_toggling_jev_persists():
@@ -147,3 +162,39 @@ async def test_language_switch_changes_menu_language():
     from storage import chats
     await feed(tap(f"cfg:{GROUP}:lang"))
     assert chats.get_chat(GROUP).lang == "ru"
+
+
+async def test_mode_toggle_does_not_touch_observe_until():
+    # Decision 2's central guarantee: the mode toggle flips only between
+    # "observe" and "active" and must never write observe_until - flipping
+    # mode is not how a chat leaves or re-enters its observation window.
+    from storage import chats
+    before = chats.get_chat(GROUP).observe_until
+    assert before is not None
+    await feed(tap(f"cfg:{GROUP}:mode"))
+    assert chats.get_chat(GROUP).observe_until == before
+
+
+async def test_bare_chat_callback_rerenders_menu_without_changing_state():
+    from storage import chats
+    before = chats.get_chat(GROUP)
+    await feed(tap(f"cfg:{GROUP}"))
+    assert chats.get_chat(GROUP) == before
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert edits and edits[-1].reply_markup is not None
+
+
+async def test_group_title_with_markup_is_escaped_and_does_not_crash_chats():
+    # chat.title is Telegram-controlled free text (the group's own title)
+    # rendered into an HTML-parse-mode message, exactly like
+    # core.cards.render_card's chat_title. Unescaped, "<chat>" is not a tag
+    # Telegram's HTML mode understands, so a real send would be rejected -
+    # the fake_call above simulates that rejection. This must not crash
+    # /chats, and the title must reach the admin escaped, not stripped.
+    from storage import chats
+    chats.update_chat(GROUP, title="R&D <chat>")
+    await feed(dm("/chats"))
+    text = sent()[-1].text
+    assert "<chat>" not in text
+    assert "&lt;chat&gt;" in text
+    assert "&amp;" in text

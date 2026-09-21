@@ -6,6 +6,7 @@ stale row in the chats table must never be enough to grant control over a
 group's moderation settings, so the presser's status for the group being
 configured is always looked up fresh, never read from our own database.
 """
+import html
 import logging
 import sqlite3
 
@@ -89,26 +90,33 @@ def _jev_label(chat, lang: str) -> str:
 def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
     lang = chat.lang
     cid = chat.chat_id
+    # chat.title comes from Telegram (the group's own title) and is sent
+    # with HTML parse mode, exactly like core.cards.render_card's chat_title
+    # - it must be escaped before it reaches the message body, or a title
+    # containing "&"/"<"/">" makes Telegram reject the whole send.
+    safe_title = html.escape(chat.title) if chat.title else str(cid)
+    delete_label = t("menu_delete_threshold", lang)
+    review_label = t("menu_review_threshold", lang)
     body = "\n".join([
-        t("menu_title", lang, title=chat.title or str(cid)),
+        t("menu_title", lang, title=safe_title),
         "",
         f"{t('menu_mode', lang)}: {chat.mode}",
         f"{t('menu_jev', lang)}: {'on' if chat.jev_enabled else 'off'}",
-        f"{t('menu_thresholds', lang)}: delete ≥ {chat.delete_threshold:.2f}, "
-        f"review ≥ {chat.review_threshold:.2f}",
+        f"{t('menu_thresholds', lang)}: {delete_label} ≥ {chat.delete_threshold:.2f}, "
+        f"{review_label} ≥ {chat.review_threshold:.2f}",
         f"{t('menu_lang', lang)}: {lang}",
         f"{t('menu_log_chat', lang)}: {chat.log_chat_id or '—'}",
     ])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=_mode_label(chat, lang), callback_data=f"cfg:{cid}:mode"),
          InlineKeyboardButton(text=_jev_label(chat, lang), callback_data=f"cfg:{cid}:jev")],
-        [InlineKeyboardButton(text="delete −",
+        [InlineKeyboardButton(text=f"{delete_label} −",
                               callback_data=f"cfg:{cid}:thr:delete_threshold:-"),
-         InlineKeyboardButton(text="delete +",
+         InlineKeyboardButton(text=f"{delete_label} +",
                               callback_data=f"cfg:{cid}:thr:delete_threshold:+")],
-        [InlineKeyboardButton(text="review −",
+        [InlineKeyboardButton(text=f"{review_label} −",
                               callback_data=f"cfg:{cid}:thr:review_threshold:-"),
-         InlineKeyboardButton(text="review +",
+         InlineKeyboardButton(text=f"{review_label} +",
                               callback_data=f"cfg:{cid}:thr:review_threshold:+")],
         [InlineKeyboardButton(text=f"{t('menu_lang', lang)}: {lang}",
                               callback_data=f"cfg:{cid}:lang")],
@@ -139,7 +147,13 @@ async def on_chats(message: Message) -> None:
         return
     for chat in owned:
         body, keyboard = _menu(chat)
-        await message.answer(body, reply_markup=keyboard)
+        try:
+            await message.answer(body, reply_markup=keyboard)
+        except TelegramAPIError as exc:
+            # One malformed or oversized menu must not take down /chats for
+            # every other chat this admin administers - mirrors on_config's
+            # guard around edit_text below.
+            log.warning("could not send menu for chat %s: %s", chat.chat_id, exc)
 
 
 def _parse_callback(data: str):
@@ -186,13 +200,18 @@ async def on_config(query: CallbackQuery) -> None:
         return
     chat_id, field, extra = parsed
 
+    # Admin status is checked before anything about the chat's existence in
+    # our own storage is revealed. Checking existence first would let a
+    # forwarded or guessed button tell a non-admin whether a given chat id
+    # is in the bot's database at all - a privilege boundary should not
+    # leak that for free.
+    if not await _is_admin(query.bot, chat_id, query.from_user.id):
+        await query.answer(t("menu_not_admin"), show_alert=True)
+        return
+
     chat = _best_effort("get_chat", chat_id, chats.get_chat, chat_id)
     if chat is None:
         await query.answer(t("no_chats"))
-        return
-
-    if not await _is_admin(query.bot, chat_id, query.from_user.id):
-        await query.answer(t("menu_not_admin", chat.lang), show_alert=True)
         return
 
     if field == "mode":
