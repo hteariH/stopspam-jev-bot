@@ -34,8 +34,17 @@ class MessageFacts:
 
 
 def _domain(raw: str) -> str:
+    """Extract domain from URL, returning "" if parsing fails.
+
+    Handles malformed URLs gracefully to prevent crashes on hostile input
+    (e.g., unbalanced brackets in IPv6 addresses).
+    """
     candidate = raw if "://" in raw else f"http://{raw}"
-    host = urlparse(candidate).netloc.lower()
+    try:
+        host = urlparse(candidate).netloc.lower()
+    except ValueError:
+        # Invalid URL (e.g., malformed IPv6 literal) — skip this domain
+        return ""
     return host[4:] if host.startswith("www.") else host
 
 
@@ -73,9 +82,11 @@ def facts_from_message(message, *, author_message_count: int,
     urls = _URL_RE.findall(text)
     media_type = next((name for name in _MEDIA_ATTRS
                        if getattr(message, name, None) is not None), None)
+    # Filter out empty domains (from unparseable URLs)
+    domains = tuple(dict.fromkeys(d for d in (_domain(u) for u in urls) if d))
     return MessageFacts(
         text=text,
-        link_domains=tuple(dict.fromkeys(_domain(u) for u in urls)),
+        link_domains=domains,
         link_count=len(urls),
         has_invite_link=bool(_INVITE_RE.search(text)),
         is_forward=bool(getattr(message, "forward_origin", None)),
@@ -84,6 +95,6 @@ def facts_from_message(message, *, author_message_count: int,
         author_message_count=author_message_count,
         author_days_in_group=author_days_in_group,
         author_has_username=bool(message.from_user and message.from_user.username),
-        group_title=message.chat.title or "",
-        group_description=group_description or "",
+        group_title=(message.chat.title or "")[:128],
+        group_description=(group_description or "")[:255],
     )

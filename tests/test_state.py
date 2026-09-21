@@ -68,3 +68,106 @@ def test_facts_handle_caption_only_media():
     assert extracted.text == "earn 500 a day"
     assert extracted.is_caption is True
     assert extracted.author_has_username is False
+
+
+def test_facts_handle_malformed_ipv6_url():
+    """Malformed IPv6 address (unbalanced bracket) should not crash extraction."""
+    message = Message(
+        message_id=3, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
+        from_user=User(id=5, is_bot=False, first_name="Eve"),
+        text="click http://[::1/free-money now",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description="Talk about Python",
+    )
+    # Should return normally without raising ValueError
+    assert extracted.text == "click http://[::1/free-money now"
+    # URL was matched by regex, so link_count is 1
+    assert extracted.link_count == 1
+    # Domain parsing failed, so link_domains is empty
+    assert extracted.link_domains == ()
+
+
+def test_facts_handle_multiple_malformed_urls():
+    """Multiple URLs, some valid and some malformed, should extract valid domains only."""
+    message = Message(
+        message_id=4, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
+        from_user=User(id=5, is_bot=False, first_name="Frank"),
+        text="visit https://good.example.com and http://[::1/bad and www.another-good.net",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description="",
+    )
+    # Three URLs matched
+    assert extracted.link_count == 3
+    # Two valid domains extracted
+    assert "good.example.com" in extracted.link_domains
+    assert "another-good.net" in extracted.link_domains
+    # Malformed URL's domain is skipped
+    assert len(extracted.link_domains) == 2
+
+
+def test_facts_handle_stray_bracket():
+    """Stray closing bracket in URL should not crash."""
+    message = Message(
+        message_id=5, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
+        from_user=User(id=5, is_bot=False, first_name="Grace"),
+        text="check this://weird]url/path",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description="",
+    )
+    # Should return normally
+    assert extracted is not None
+    assert isinstance(extracted.link_domains, tuple)
+
+
+def test_facts_handle_very_long_url():
+    """Very long malformed URL should not crash extraction."""
+    message = Message(
+        message_id=6, date=NOW, chat=Chat(id=-100, type="supergroup", title="Python Chat"),
+        from_user=User(id=5, is_bot=False, first_name="Henry"),
+        text="see http://[" + "x" * 10000 + "/malformed",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description="",
+    )
+    # Should return normally even with very long garbage
+    assert extracted is not None
+    assert isinstance(extracted.link_count, int)
+
+
+def test_facts_cap_group_title_at_128_chars():
+    """Group title should be capped defensively at 128 characters."""
+    long_title = "A" * 200
+    message = Message(
+        message_id=7, date=NOW, chat=Chat(id=-100, type="supergroup", title=long_title),
+        from_user=User(id=5, is_bot=False, first_name="Ivan"),
+        text="hi",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description="",
+    )
+    assert len(extracted.group_title) == 128
+    assert extracted.group_title == "A" * 128
+
+
+def test_facts_cap_group_description_at_255_chars():
+    """Group description should be capped defensively at 255 characters."""
+    long_description = "B" * 300
+    message = Message(
+        message_id=8, date=NOW, chat=Chat(id=-100, type="supergroup", title="Group"),
+        from_user=User(id=5, is_bot=False, first_name="Jack"),
+        text="hi",
+    )
+    extracted = facts_from_message(
+        message, author_message_count=0, author_days_in_group=0.0,
+        group_description=long_description,
+    )
+    assert len(extracted.group_description) == 255
+    assert extracted.group_description == "B" * 255
