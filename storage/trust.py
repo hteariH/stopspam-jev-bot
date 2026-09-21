@@ -34,7 +34,17 @@ def _row(chat_id: int, user_id: int) -> TrustRow:
     )
 
 
-get = _row
+def _exists(chat_id: int, user_id: int) -> bool:
+    """Check if a trust row exists for this (chat, user) pair."""
+    row = db.connect().execute(
+        "SELECT 1 FROM trust WHERE chat_id = ? AND user_id = ?", (chat_id, user_id)
+    ).fetchone()
+    return row is not None
+
+
+def get(chat_id: int, user_id: int) -> TrustRow:
+    """Get the trust row for a user in a chat, returning default 'unknown' if absent."""
+    return _row(chat_id, user_id)
 
 
 def seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow:
@@ -45,6 +55,7 @@ def seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow:
     30-day re-check in core.gate could never fire.
     """
     prior = _row(chat_id, user_id)
+    row_existed = _exists(chat_id, user_id)
     conn = db.connect()
     stamp = db.now()
     conn.execute(
@@ -56,7 +67,7 @@ def seen(chat_id: int, user_id: int, joined_at: str | None = None) -> TrustRow:
         (chat_id, user_id, joined_at or stamp, stamp),
     )
     conn.commit()
-    if prior.joined_at is None:
+    if not row_existed:
         return _row(chat_id, user_id)
     return prior
 
@@ -95,8 +106,9 @@ def record_clean(chat_id: int, user_id: int, trust_after: int) -> TrustRow:
 
 
 def mark_flagged(chat_id: int, user_id: int) -> TrustRow:
-    if _row(chat_id, user_id).status == ALLOWLISTED:
-        return _row(chat_id, user_id)
+    current = _row(chat_id, user_id)
+    if current.status == ALLOWLISTED:
+        return current
     return _set_status(chat_id, user_id, FLAGGED)
 
 

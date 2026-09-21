@@ -84,3 +84,24 @@ def test_days_in_group_comes_from_joined_at():
         "WHERE chat_id = -100 AND user_id = 555")
     db.connect().commit()
     assert trust.days_in_group(trust.get(-100, 555)) > 365
+
+
+def test_seen_after_allowlist_returns_prior_snapshot():
+    """seen() must return pre-call state when row was created by allowlist before first seen."""
+    from storage import db, trust
+
+    # Pre-create a row via allowlist (not seen)
+    trust.allowlist(-100, 555)
+    old_timestamp = "2020-01-01T00:00:00+00:00"
+    db.connect().execute(
+        "UPDATE trust SET last_seen_at = ? WHERE chat_id = -100 AND user_id = 555",
+        (old_timestamp,))
+    db.connect().commit()
+
+    # Call seen() - should return prior state with old timestamp, not refreshed one
+    prior = trust.seen(-100, 555)
+    assert prior.status == "allowlisted", "seen() must return prior status"
+    assert prior.last_seen_at == old_timestamp, "seen() must return prior last_seen_at"
+
+    # But the stored row was still refreshed for next time
+    assert trust.get(-100, 555).last_seen_at != old_timestamp
