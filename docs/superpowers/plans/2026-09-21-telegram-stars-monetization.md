@@ -1232,40 +1232,86 @@ async def run(client, *, chat=None, message_facts=None, is_admin=False,
 
 Add `entitlement=ENTITLED` to the inline call at line 80 as well.
 
-- [ ] **Step 6: Write the failing group-handler test**
+- [ ] **Step 6: Write the failing group-handler tests**
 
-Append to `tests/test_group_handler.py`, following that file's existing fixture style for building a fake bot and message:
+`tests/test_group_handler.py` has **no `FakeBot` class**. Like `tests/test_flow.py`,
+it patches `Bot.__call__ = fake_call` in its `fresh` fixture and builds a real
+`Bot("123:abc", ...)` per dispatch. Extend that machinery rather than inventing a
+parallel one.
+
+**First, the knobs.** Add at module level, beside the existing `plain_members` set:
+
+```python
+# The member count fake_call reports, and a record of how often it was asked.
+# A list rather than an int so fake_call can mutate it without `global`.
+MEMBERS = [150]
+count_calls: list = []
+# Non-empty makes the next count lookup fail, the way `unreachable` does for
+# GetChatMember.
+count_fails: list = []
+```
+
+Add `GetChatMemberCount` to the `aiogram.methods` import, and add this branch to
+`fake_call` **before** its final `return True`:
+
+```python
+    if isinstance(method, GetChatMemberCount):
+        count_calls.append(method)
+        if count_fails:
+            raise TelegramNetworkError(method=method, message="count failed")
+        return MEMBERS[0]
+```
+
+This branch is not optional. Without it the method falls through to `return True`,
+and because `True <= 200` is true in Python, **every chat would read as the free
+tier and every test below would pass for the wrong reason.**
+
+In the `fresh` fixture, reset all three alongside the existing `calls.clear()`:
+
+```python
+    MEMBERS[0] = 150
+    count_calls.clear()
+    count_fails.clear()
+```
+
+Add a helper beside `dispatch()`, since these tests call `_entitlement` directly
+rather than through a dispatcher:
+
+```python
+def a_bot() -> Bot:
+    return Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+```
+
+**Then the tests:**
 
 ```python
 async def test_entitlement_is_free_when_the_group_is_small():
+    from core import tiers
     from handlers import group
     from storage import chats
-    from core import tiers
-
-    chat = chats.ensure_chat(-100123, "Small Group")
-    bot = FakeBot(member_count=150)
-    ent, _ = await group._entitlement(bot, chat)
+    chat = chats.ensure_chat(GROUP, "Small Group")
+    MEMBERS[0] = 150
+    ent, _ = await group._entitlement(a_bot(), chat)
     assert ent.tier == tiers.FREE
     assert ent.active is True
 
 
 async def test_a_large_unpaid_group_outside_observation_gets_grace_once():
+    from core import tiers
     from handlers import group
     from storage import billing, chats
-    from core import tiers
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    chat = chats.get_chat(GROUP)
+    MEMBERS[0] = 5000
 
-    chats.ensure_chat(-100123, "Big Group")
-    chats.update_chat(-100123, mode="active", observe_until="2020-01-01T00:00:00+00:00")
-    chat = chats.get_chat(-100123)
-
-    bot = FakeBot(member_count=5000)
-    first, _ = await group._entitlement(bot, chat)
+    first, _ = await group._entitlement(a_bot(), chat)
     assert first.tier == tiers.LARGE
     assert (first.active, first.reason) == (True, "grace")
 
-    opened = billing.get(-100123).grace_until
-    second, _ = await group._entitlement(bot, chat)
-    assert billing.get(-100123).grace_until == opened, "grace must be set once, ever"
+    opened = billing.get(GROUP).grace_until
+    second, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until == opened, "grace must be set once, ever"
     assert second.reason == "grace"
 
 
@@ -1274,44 +1320,35 @@ async def test_grace_does_not_start_while_the_chat_is_still_observing():
     anyway, and the admin evaluates a product they never saw working."""
     from handlers import group
     from storage import billing, chats
-
-    chat = chats.ensure_chat(-100123, "Big New Group")  # observe_until is in the future
-    bot = FakeBot(member_count=5000)
-    ent, _ = await group._entitlement(bot, chat)
-    assert billing.get(-100123).grace_until is None
+    chat = chats.ensure_chat(GROUP, "Big New Group")  # observe_until is in the future
+    MEMBERS[0] = 5000
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until is None
     assert ent.active is False
 
 
 async def test_the_member_count_is_not_refetched_within_the_cache_window():
     from handlers import group
     from storage import chats
-
-    chat = chats.ensure_chat(-100123, "Group")
-    bot = FakeBot(member_count=150)
-    await group._entitlement(bot, chat)
-    await group._entitlement(bot, chat)
-    assert bot.member_count_calls == 1
+    chat = chats.ensure_chat(GROUP, "Group")
+    MEMBERS[0] = 150
+    await group._entitlement(a_bot(), chat)
+    await group._entitlement(a_bot(), chat)
+    assert len(count_calls) == 1
 
 
 async def test_a_failed_member_count_lookup_does_not_disarm_moderation():
+    """A billing lookup must never be what stops a group being moderated."""
     from handlers import group
     from storage import chats
-
-    chat = chats.ensure_chat(-100123, "Group")
-    bot = FakeBot(member_count_raises=TelegramAPIError(method=None, message="boom"))
-    ent, _ = await group._entitlement(bot, chat)
+    chat = chats.ensure_chat(GROUP, "Group")
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chat)
     assert ent.active is True
 ```
 
-Extend the test file's fake bot with `member_count`, `member_count_calls` and `member_count_raises`, implementing:
-
-```python
-    async def get_chat_member_count(self, chat_id):
-        self.member_count_calls += 1
-        if self.member_count_raises is not None:
-            raise self.member_count_raises
-        return self.member_count
-```
+`TelegramNetworkError` is already imported in this file and derives from
+`TelegramAPIError`, which is what `_member_count` catches.
 
 - [ ] **Step 7: Run them and watch them fail**
 
