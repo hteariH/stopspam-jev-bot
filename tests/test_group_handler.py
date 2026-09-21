@@ -659,3 +659,25 @@ async def test_a_failed_member_count_lookup_does_not_disarm_moderation():
     count_fails.append(True)
     ent, _ = await group._entitlement(a_bot(), chat)
     assert ent.active is True
+
+
+async def test_a_failed_refetch_keeps_the_cached_tier():
+    """A paying large group whose refetch fails must not silently demote to
+    free - that would hand it the service unbilled and never open grace."""
+    from core import tiers
+    from handlers import group
+    from storage import billing, chats, db
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    billing.set_member_count(GROUP, 5000)
+    # set_member_count stamps member_count_at to now, so age it past the TTL -
+    # otherwise the refetch is skipped entirely and this test proves nothing.
+    conn = db.connect()
+    conn.execute("UPDATE billing SET member_count_at = ? WHERE chat_id = ?",
+                 ("2020-01-01T00:00:00+00:00", GROUP))
+    conn.commit()
+
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chats.get_chat(GROUP))
+    assert len(count_calls) == 1, "the refetch must actually have been attempted"
+    assert ent.tier == tiers.LARGE, "a failed refetch must not demote a paying group to free"
