@@ -28,6 +28,13 @@ def fresh(monkeypatch):
     from storage import db
     db.reset()
     calls.clear()
+    # Bot.__call__ is a single class attribute shared by every test module
+    # that patches it. pytest imports (collects) all test files before
+    # running any test, so whichever module was imported last would win for
+    # every test in the session if this assignment lived at module level.
+    # Re-asserting it here, per test, makes this module immune to collection
+    # order and to any other module patching the same attribute.
+    Bot.__call__ = fake_call
     # handlers.group's `router` is a module-level aiogram Router, and aiogram
     # refuses to attach a Router that already has a parent Dispatcher. Each
     # test below builds its own Dispatcher and includes handlers.group.router,
@@ -55,9 +62,6 @@ async def fake_call(self, method, request_timeout=None):
             user=User(id=method.user_id, is_bot=False, first_name="Boss"),
             status="creator", is_anonymous=False)
     return True
-
-
-Bot.__call__ = fake_call
 
 
 def group_message(text: str, user_id: int = SPAMMER, msg_id: int = 1) -> Update:
