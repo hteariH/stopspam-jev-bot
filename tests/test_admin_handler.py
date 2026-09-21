@@ -358,3 +358,61 @@ async def test_a_failed_dm_does_not_escape_the_handler():
         await feed(dm("/help"))
     finally:
         texts.STRINGS["help"]["en"] = original
+
+
+def test_the_menu_names_the_plan_for_a_free_group():
+    from handlers import admin
+    from storage import billing, chats
+    chats.ensure_chat(GROUP, "Small")
+    billing.set_member_count(-100123, 150)
+    body, _ = admin._menu(chats.get_chat(-100123), billing.get(-100123))
+    assert "Plan" in body or "Тариф" in body
+    assert "150" in body
+
+
+def test_the_menu_tells_an_unpaid_large_group_that_nothing_is_deleted():
+    from handlers import admin
+    from storage import billing, chats
+    chats.ensure_chat(GROUP, "Big")
+    billing.set_member_count(-100123, 5000)
+    body, _ = admin._menu(chats.get_chat(-100123), billing.get(-100123))
+    assert "no subscription" in body
+
+
+def test_the_start_deleting_button_appears_only_while_observing():
+    from handlers import admin
+    from storage import billing, chats
+    chats.ensure_chat(-100123, "G")
+    observing_body, observing_kb = admin._menu(chats.get_chat(-100123),
+                                               billing.get(-100123))
+    labels = [b.callback_data for row in observing_kb.inline_keyboard for b in row]
+    assert any(d and d.endswith(":gonow") for d in labels)
+
+    chats.update_chat(-100123, mode="active",
+                      observe_until="2020-01-01T00:00:00+00:00")
+    _, done_kb = admin._menu(chats.get_chat(-100123), billing.get(-100123))
+    labels = [b.callback_data for row in done_kb.inline_keyboard for b in row]
+    assert not any(d and d.endswith(":gonow") for d in labels)
+
+
+async def test_pressing_start_deleting_ends_the_observation_window():
+    from storage import chats
+    chats.ensure_chat(GROUP, "G")
+    await feed(tap(f"cfg:{GROUP}:gonow"))
+    chat = chats.get_chat(GROUP)
+    assert chat.mode == "active"
+    assert chats.is_observing(chat) is False
+
+
+async def test_a_non_admin_cannot_end_the_observation_window():
+    """BYSTANDER is the file's non-admin: fake_call answers GetChatMember with
+    ChatMemberAdministrator only for ADMIN."""
+    from storage import chats
+    chats.ensure_chat(GROUP, "G")
+    await feed(tap(f"cfg:{GROUP}:gonow", user_id=BYSTANDER))
+    assert chats.is_observing(chats.get_chat(GROUP)) is True
+
+
+def test_gonow_is_an_accepted_callback_field():
+    from handlers import admin
+    assert admin._parse_callback("cfg:-100123:gonow") == (-100123, "gonow", None)
