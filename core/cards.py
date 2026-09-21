@@ -9,10 +9,14 @@ from core.verdict import Verdict
 from texts import t
 
 MAX_QUOTE = 700
+MAX_TITLE = 64
+MAX_NAME = 64
 
 
 def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
                 author_id: int, text: str | None, chat_title: str, lang: str) -> str:
+    chat_title = chat_title[:MAX_TITLE]
+    author_name = author_name[:MAX_NAME]
     quote = (text or "")[:MAX_QUOTE]
     if text and len(text) > MAX_QUOTE:
         quote += "…"
@@ -21,7 +25,7 @@ def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
         f"{html.escape(t('card_chat', lang))}: {html.escape(chat_title)}",
         f"{html.escape(t('card_author', lang))}: "
         f"{html.escape(author_name)} (<code>{author_id}</code>)",
-        f"{html.escape(t('card_risk', lang))}: {decision.risk:.2f} ({decision.reason})",
+        f"{html.escape(t('card_risk', lang))}: {decision.risk:.2f} ({html.escape(decision.reason)})",
         f"{html.escape(t('card_kind', lang))}: {html.escape(verdict.kind)}",
         "",
         f"<b>{html.escape(t('card_breakdown', lang))}</b>",
