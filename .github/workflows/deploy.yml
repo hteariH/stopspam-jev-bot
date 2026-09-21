@@ -1,8 +1,9 @@
-name: deploy
+name: CI & Deploy
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -23,9 +24,29 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Create a throwaway .env for the image build
+        # docker-compose.yml declares env_file: .env, so docker compose
+        # refuses to even parse the config without one. These values are
+        # never used for anything but the import check below.
+        run: |
+          echo "BOT_TOKEN=ci-build-placeholder" > .env
+          echo "TYPESAFE_API_KEY=ci-build-placeholder" >> .env
+
+      - name: Build the image
+        run: docker compose build
+
+      - name: Verify the image can import the bot
+        # bot.py's main() exits without a real TYPESAFE_API_KEY, so this
+        # imports the module instead of running it - it still fails loudly
+        # on a missing package directory (core/handlers/storage), which is
+        # the failure mode a partial COPY list would otherwise hide until
+        # the deploy's running-container check, after a push and an scp.
+        run: docker compose run --rm --entrypoint python bot -c "import bot"
+
   deploy:
     name: Deploy to VPS
     needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
