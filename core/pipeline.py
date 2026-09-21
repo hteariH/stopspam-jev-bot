@@ -1,6 +1,7 @@
 """update -> gate -> state -> jev -> policy. Failure always resolves downward."""
 import functools
 import logging
+import time
 from dataclasses import dataclass
 
 from core import gate, guards, policy, state, tiers
@@ -56,6 +57,7 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
     if not gated.check:
         return Outcome(None, None, facts, gated.reason)
 
+    started = time.monotonic()
     try:
         verdict = await client.classify(state.build_state(facts))
     except JevError as exc:
@@ -64,6 +66,15 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
         _best_effort("audit", chat.chat_id, audit.record,
                      chat.chat_id, trust_row.user_id, None, None, "failed", reason)
         return Outcome(None, None, facts, reason)
+
+    # One line per billable call, naming the chat that caused it. This is the
+    # only record of successful spend outside the audit table, and it is what
+    # makes "which chats are costing me money, and are any of them paying?"
+    # answerable with grep.
+    log.info("jev call for chat %s (user %s, %s, tier=%s, entitled=%s) took %d ms",
+             chat.chat_id, trust_row.user_id, gated.reason, entitlement.tier,
+             "yes" if entitlement.active else "no",
+             (time.monotonic() - started) * 1000)
 
     decision = policy.decide(
         verdict,
@@ -74,6 +85,10 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
         is_allowlisted=trust_row.status == trust.ALLOWLISTED,
         entitled=entitlement.active,
     )
+
+    if decision.reason == policy.REASON_NOT_ENTITLED:
+        log.info("enforcement withheld in chat %s: tier %s has no subscription "
+                 "(risk %.2f)", chat.chat_id, entitlement.tier, decision.risk)
 
     if decision.action == Action.IGNORE:
         _best_effort("record_clean", chat.chat_id, trust.record_clean,
