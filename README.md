@@ -23,6 +23,37 @@ back. New members, and anyone who has already been flagged, are checked on
 every message. This keeps the bot's attention, and what it sends to the
 classifier, limited to the traffic it exists to catch.
 
+## What it costs
+
+Groups of **200 members or fewer use the whole bot for free**, including
+automatic deletion, with no time limit.
+
+Above that, automatic deletion needs a subscription, paid in Telegram
+Stars from the `/chats` menu:
+
+| Members | Price |
+|---|---|
+| up to 200 | free |
+| 201 – 1000 | 50 ⭐ per 30 days |
+| over 1000 | 250 ⭐ per 30 days |
+
+A group that grows past 200 gets **14 days of full enforcement for free**
+before anything changes, and is told when that starts and before it ends.
+
+Without a subscription the bot does not switch off. It still checks every
+message it would have checked, still writes its audit log, and still sends
+review cards to the admins — it just does not delete anything itself. The
+card says so, and carries the button to change it.
+
+Nothing about payment changes how a message is judged. The classifier, the
+thresholds, the confidence floor and the guard that admins are never acted
+upon are identical on every tier. Payment gates what may be done about a
+message, never the judgment of it.
+
+Subscriptions renew every 30 days and can be cancelled at any time in
+Telegram under Settings → My Stars → Subscriptions. The price is fixed when
+you subscribe and does not change if the group grows.
+
 ## The first 7 days: observation only
 
 When the bot is added to a new group, it spends its first 7 days in
@@ -127,6 +158,13 @@ and are writing nothing new. The human decision recorded against a message is
 kept, but not the text itself. The audit log the bot keeps for every evaluation never stores
 message text at all.
 
+One thing the bot keeps forever: when someone pays for a group, it records
+who paid, for which group, when, and the Telegram charge id, alongside the
+member count it caches per chat. That ledger is append-only and nothing ever
+deletes from it, because a disputed or refunded charge cannot be looked up
+without it — Telegram sends no "payment revoked" update, so this is the only
+record that will exist.
+
 Any admin can turn classification off for their chat at any time with
 `/chats`. This section is meant to match exactly what the bot's own
 `/privacy` command tells an admin in Telegram — if the two ever disagree,
@@ -151,6 +189,10 @@ docker compose up
 This builds the image, runs the bot with `DB_PATH` pointed at a volume
 (`./data`), and restarts it unless you stop it. Message data lives entirely
 in that SQLite file on the volume; there is no other datastore.
+
+A self-hosted instance bills to its own bot, so the tier limits above apply
+only to the public `@StopSpam_jev_bot`. To turn billing off entirely, set
+`FREE_MEMBER_LIMIT` to a number no group will reach.
 
 To run it directly instead of in Docker, install `requirements.txt` into a
 Python 3.10+ environment and run `python bot.py` with the same `.env` in

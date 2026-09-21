@@ -31,3 +31,21 @@ OBSERVE_DAYS = _int("OBSERVE_DAYS", 7)
 REVIEW_TTL_DAYS = _int("REVIEW_TTL_DAYS", 7)
 RECHECK_AFTER_DAYS = _int("RECHECK_AFTER_DAYS", 30)
 ENFORCEMENT_PER_MINUTE = _int("ENFORCEMENT_PER_MINUTE", 10)
+
+# Billing. Tier is a function of the group's Telegram member count; the API
+# cost is not an input to the price (see the monetization design), so these
+# are product decisions, not derived numbers.
+FREE_MEMBER_LIMIT = _int("FREE_MEMBER_LIMIT", 200)
+SMALL_MEMBER_LIMIT = _int("SMALL_MEMBER_LIMIT", 1000)
+PRICE_SMALL_STARS = _int("PRICE_SMALL_STARS", 50)
+PRICE_LARGE_STARS = _int("PRICE_LARGE_STARS", 250)
+
+# The free trial of enforcement, and how long before it ends we say so.
+GRACE_DAYS = _int("GRACE_DAYS", 14)
+GRACE_WARN_DAYS = _int("GRACE_WARN_DAYS", 3)
+
+# get_chat_member_count is an API call, so the answer is cached this long.
+MEMBER_COUNT_TTL_HOURS = _int("MEMBER_COUNT_TTL_HOURS", 24)
+
+# Not tunable: createInvoiceLink rejects every other value today.
+SUBSCRIPTION_PERIOD = 2592000

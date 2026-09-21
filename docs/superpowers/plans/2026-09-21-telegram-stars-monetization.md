@@ -1203,7 +1203,9 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
     )
 ```
 
-Update the two calls in `tests/test_pipeline.py` (lines 50 and 80) to pass an entitled value. Add this helper near the top of that file and pass `entitlement=ENTITLED` at both call sites:
+`tests/test_pipeline.py` calls `pipeline.evaluate` in two places: inside its
+`run()` helper (line 50) and inline at line 80. Add the import and a default near
+the top of that file:
 
 ```python
 from core import tiers
@@ -1211,91 +1213,142 @@ from core import tiers
 ENTITLED = tiers.Entitlement(tier=tiers.FREE, active=True, reason="free_tier", price=0)
 ```
 
-- [ ] **Step 6: Write the failing group-handler test**
-
-Append to `tests/test_group_handler.py`, following that file's existing fixture style for building a fake bot and message:
+Give `run()` the new keyword so Task 6 can override it, and pass it through:
 
 ```python
-@pytest.mark.asyncio
+async def run(client, *, chat=None, message_facts=None, is_admin=False,
+              can_delete=True, entitlement=ENTITLED):
+    from core import pipeline
+    return await pipeline.evaluate(
+        client,
+        chat=chat or active_chat(),
+        facts=message_facts or facts(),
+        trust_row=trust_row(),
+        is_admin=is_admin,
+        can_delete=can_delete,
+        entitlement=entitlement,
+    )
+```
+
+Add `entitlement=ENTITLED` to the inline call at line 80 as well.
+
+- [ ] **Step 6: Write the failing group-handler tests**
+
+`tests/test_group_handler.py` has **no `FakeBot` class**. Like `tests/test_flow.py`,
+it patches `Bot.__call__ = fake_call` in its `fresh` fixture and builds a real
+`Bot("123:abc", ...)` per dispatch. Extend that machinery rather than inventing a
+parallel one.
+
+**First, the knobs.** Add at module level, beside the existing `plain_members` set:
+
+```python
+# The member count fake_call reports, and a record of how often it was asked.
+# A list rather than an int so fake_call can mutate it without `global`.
+MEMBERS = [150]
+count_calls: list = []
+# Non-empty makes the next count lookup fail, the way `unreachable` does for
+# GetChatMember.
+count_fails: list = []
+```
+
+Add `GetChatMemberCount` to the `aiogram.methods` import, and add this branch to
+`fake_call` **before** its final `return True`:
+
+```python
+    if isinstance(method, GetChatMemberCount):
+        count_calls.append(method)
+        if count_fails:
+            raise TelegramNetworkError(method=method, message="count failed")
+        return MEMBERS[0]
+```
+
+This branch is not optional. Without it the method falls through to `return True`,
+and because `True <= 200` is true in Python, **every chat would read as the free
+tier and every test below would pass for the wrong reason.**
+
+In the `fresh` fixture, reset all three alongside the existing `calls.clear()`:
+
+```python
+    MEMBERS[0] = 150
+    count_calls.clear()
+    count_fails.clear()
+```
+
+Add a helper beside `dispatch()`, since these tests call `_entitlement` directly
+rather than through a dispatcher:
+
+```python
+def a_bot() -> Bot:
+    return Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+```
+
+**Then the tests:**
+
+```python
 async def test_entitlement_is_free_when_the_group_is_small():
+    from core import tiers
     from handlers import group
     from storage import chats
-    from core import tiers
-
-    chat = chats.ensure_chat(-100123, "Small Group")
-    bot = FakeBot(member_count=150)
-    ent, _ = await group._entitlement(bot, chat)
+    chat = chats.ensure_chat(GROUP, "Small Group")
+    MEMBERS[0] = 150
+    ent, _ = await group._entitlement(a_bot(), chat)
     assert ent.tier == tiers.FREE
     assert ent.active is True
 
 
-@pytest.mark.asyncio
 async def test_a_large_unpaid_group_outside_observation_gets_grace_once():
+    from core import tiers
     from handlers import group
     from storage import billing, chats
-    from core import tiers
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    chat = chats.get_chat(GROUP)
+    MEMBERS[0] = 5000
 
-    chats.ensure_chat(-100123, "Big Group")
-    chats.update_chat(-100123, mode="active", observe_until="2020-01-01T00:00:00+00:00")
-    chat = chats.get_chat(-100123)
-
-    bot = FakeBot(member_count=5000)
-    first, _ = await group._entitlement(bot, chat)
+    first, _ = await group._entitlement(a_bot(), chat)
     assert first.tier == tiers.LARGE
     assert (first.active, first.reason) == (True, "grace")
 
-    opened = billing.get(-100123).grace_until
-    second, _ = await group._entitlement(bot, chat)
-    assert billing.get(-100123).grace_until == opened, "grace must be set once, ever"
+    opened = billing.get(GROUP).grace_until
+    second, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until == opened, "grace must be set once, ever"
     assert second.reason == "grace"
 
 
-@pytest.mark.asyncio
 async def test_grace_does_not_start_while_the_chat_is_still_observing():
     """Otherwise half the trial burns during a week when nothing is deleted
     anyway, and the admin evaluates a product they never saw working."""
     from handlers import group
     from storage import billing, chats
-
-    chat = chats.ensure_chat(-100123, "Big New Group")  # observe_until is in the future
-    bot = FakeBot(member_count=5000)
-    ent, _ = await group._entitlement(bot, chat)
-    assert billing.get(-100123).grace_until is None
+    chat = chats.ensure_chat(GROUP, "Big New Group")  # observe_until is in the future
+    MEMBERS[0] = 5000
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until is None
     assert ent.active is False
 
 
-@pytest.mark.asyncio
 async def test_the_member_count_is_not_refetched_within_the_cache_window():
     from handlers import group
     from storage import chats
+    chat = chats.ensure_chat(GROUP, "Group")
+    MEMBERS[0] = 150
+    await group._entitlement(a_bot(), chat)
+    await group._entitlement(a_bot(), chat)
+    assert len(count_calls) == 1
 
-    chat = chats.ensure_chat(-100123, "Group")
-    bot = FakeBot(member_count=150)
-    await group._entitlement(bot, chat)
-    await group._entitlement(bot, chat)
-    assert bot.member_count_calls == 1
 
-
-@pytest.mark.asyncio
 async def test_a_failed_member_count_lookup_does_not_disarm_moderation():
+    """A billing lookup must never be what stops a group being moderated."""
     from handlers import group
     from storage import chats
-
-    chat = chats.ensure_chat(-100123, "Group")
-    bot = FakeBot(member_count_raises=TelegramAPIError(method=None, message="boom"))
-    ent, _ = await group._entitlement(bot, chat)
+    chat = chats.ensure_chat(GROUP, "Group")
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chat)
     assert ent.active is True
 ```
 
-Extend the test file's fake bot with `member_count`, `member_count_calls` and `member_count_raises`, implementing:
-
-```python
-    async def get_chat_member_count(self, chat_id):
-        self.member_count_calls += 1
-        if self.member_count_raises is not None:
-            raise self.member_count_raises
-        return self.member_count
-```
+`TelegramNetworkError` is already imported in this file and derives from
+`TelegramAPIError`, which is what `_member_count` catches.
 
 - [ ] **Step 7: Run them and watch them fail**
 
@@ -1433,51 +1486,48 @@ git commit -m "Gate automatic deletion on the chat's entitlement"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_pipeline.py`:
+Append to `tests/test_pipeline.py`. Note the chat id: `active_chat()` in that
+file creates chat **-100**, not -100123. Add `import logging` at the top.
 
 ```python
-@pytest.mark.asyncio
+def _unpaid():
+    return tiers.Entitlement(tier=tiers.LARGE, active=False,
+                             reason="not_entitled", price=250)
+
+
 async def test_every_successful_classification_logs_its_chat(caplog):
     caplog.set_level(logging.INFO, logger="stopspam.pipeline")
-    await run_pipeline()  # the file's existing helper, which classifies one message
-    lines = [r.getMessage() for r in caplog.records if "jev call" in r.getMessage()]
+    await run(FakeJevClient({}, default=CHATTER))
+    lines = [r.getMessage() for r in caplog.records if r.name == "stopspam.pipeline"]
     assert len(lines) == 1
-    assert "-100123" in lines[0]
+    assert "jev call for chat -100 " in lines[0]
 
 
-@pytest.mark.asyncio
 async def test_the_call_log_names_the_tier_so_free_spend_is_visible(caplog):
     caplog.set_level(logging.INFO, logger="stopspam.pipeline")
-    await run_pipeline(entitlement=tiers.Entitlement(
-        tier=tiers.LARGE, active=False, reason="not_entitled", price=250))
+    await run(FakeJevClient({}, default=CHATTER), entitlement=_unpaid())
     line = next(r.getMessage() for r in caplog.records if "jev call" in r.getMessage())
     assert "tier=large" in line
     assert "entitled=no" in line
 
 
-@pytest.mark.asyncio
 async def test_withheld_enforcement_is_logged_with_its_chat(caplog):
     caplog.set_level(logging.INFO, logger="stopspam.pipeline")
-    await run_pipeline(
-        verdict=SCAM_VERDICT,
-        entitlement=tiers.Entitlement(tier=tiers.LARGE, active=False,
-                                      reason="not_entitled", price=250))
-    assert any("enforcement withheld in chat -100123" in r.getMessage()
+    outcome = await run(FakeJevClient({"buy crypto": SCAM}), entitlement=_unpaid())
+    assert outcome.decision.reason == "not_entitled"
+    assert any("enforcement withheld in chat -100" in r.getMessage()
                for r in caplog.records)
 
 
-@pytest.mark.asyncio
 async def test_a_failed_call_still_produces_exactly_one_line_for_that_chat(caplog):
     """Every call to TypeSafe produces one line naming its chat, whether it
     succeeded or failed - otherwise spend cannot be counted from the log."""
     caplog.set_level(logging.INFO, logger="stopspam.pipeline")
-    await run_pipeline(client=FailingClient())
-    lines = [r.getMessage() for r in caplog.records if "-100123" in r.getMessage()]
+    await run(FakeJevClient({}, fail=True))
+    lines = [r.getMessage() for r in caplog.records if r.name == "stopspam.pipeline"]
     assert len(lines) == 1
-    assert "jev unavailable" in lines[0]
+    assert "jev unavailable for chat -100" in lines[0]
 ```
-
-Adapt `run_pipeline` to the helper already present in `tests/test_pipeline.py`, giving it optional `entitlement`, `verdict` and `client` arguments defaulting to the values the existing tests use.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -1569,7 +1619,6 @@ class FakeBot:
         return "https://t.me/invoice/abc"
 
 
-@pytest.mark.asyncio
 async def test_the_invoice_is_a_thirty_day_star_subscription():
     bot = FakeBot()
     await offer.subscribe_link(bot, chat_id=-100123, title="My Group",
@@ -1581,14 +1630,12 @@ async def test_the_invoice_is_a_thirty_day_star_subscription():
     assert len(call["prices"]) == 1, "Stars invoices must carry exactly one price"
 
 
-@pytest.mark.asyncio
 async def test_the_payload_carries_the_chat_and_the_price():
     bot = FakeBot()
     await offer.subscribe_link(bot, chat_id=-100123, title="G", stars=250, lang="en")
     assert bot.calls[0]["payload"] == "sub:-100123:250"
 
 
-@pytest.mark.asyncio
 async def test_the_title_and_description_stay_inside_telegrams_limits():
     """Telegram rejects the whole call over these, which would make the
     product unbuyable rather than merely ugly."""
@@ -1600,7 +1647,6 @@ async def test_the_title_and_description_stay_inside_telegrams_limits():
     assert 1 <= len(call["description"]) <= 255
 
 
-@pytest.mark.asyncio
 async def test_a_telegram_failure_returns_none_rather_than_raising():
     from aiogram.exceptions import TelegramAPIError
     bot = FakeBot(raises=TelegramAPIError(method=None, message="nope"))
@@ -1637,7 +1683,6 @@ def test_a_chat_id_outside_sqlites_integer_range_is_refused():
     assert payments.parse_payload(f"sub:{2**63}:50") is None
 
 
-@pytest.mark.asyncio
 async def test_a_valid_payment_credits_the_chat_and_writes_the_ledger():
     from handlers import payments
     from storage import billing, chats
@@ -1649,7 +1694,6 @@ async def test_a_valid_payment_credits_the_chat_and_writes_the_ledger():
     assert billing.get(-100123).stars == 50
 
 
-@pytest.mark.asyncio
 async def test_a_redelivered_payment_grants_nothing_and_stays_quiet():
     from handlers import payments
     from storage import billing, chats
@@ -1666,7 +1710,6 @@ async def test_a_redelivered_payment_grants_nothing_and_stays_quiet():
     assert second.replies == [], "a redelivery must not thank the user twice"
 
 
-@pytest.mark.asyncio
 async def test_a_payment_for_an_unknown_chat_is_still_recorded():
     from handlers import payments
     from storage import billing
@@ -1676,7 +1719,6 @@ async def test_a_payment_for_an_unknown_chat_is_still_recorded():
     assert billing.get(-100777).paid_until is not None
 
 
-@pytest.mark.asyncio
 async def test_a_payment_with_no_expiry_still_grants_thirty_days():
     """subscription_expiration_date is optional in the Bot API; a missing one
     must not leave a paying customer with nothing."""
@@ -1691,7 +1733,6 @@ async def test_a_payment_with_no_expiry_still_grants_thirty_days():
     assert (paid - datetime.now(timezone.utc)).days >= 29
 
 
-@pytest.mark.asyncio
 async def test_pre_checkout_accepts_a_valid_invoice():
     from handlers import payments
     query = FakePreCheckout(payload="sub:-100123:50", currency="XTR", amount=50)
@@ -1699,7 +1740,6 @@ async def test_pre_checkout_accepts_a_valid_invoice():
     assert query.answered_ok is True
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("payload,currency,amount", [
     ("garbage", "XTR", 50),
     ("sub:-100123:50", "USD", 50),
@@ -1713,7 +1753,6 @@ async def test_pre_checkout_refuses_anything_that_does_not_add_up(
     assert query.answered_ok is False
 
 
-@pytest.mark.asyncio
 async def test_pre_checkout_is_always_answered_even_when_telegram_fails():
     """Telegram fails the payment if the query goes unanswered for ten
     seconds, so the handler must never raise on its way to answering."""
@@ -2193,7 +2232,7 @@ Append to `tests/test_admin_handler.py`:
 def test_the_menu_names_the_plan_for_a_free_group():
     from handlers import admin
     from storage import billing, chats
-    chats.ensure_chat(-100123, "Small")
+    chats.ensure_chat(GROUP, "Small")
     billing.set_member_count(-100123, 150)
     body, _ = admin._menu(chats.get_chat(-100123), billing.get(-100123))
     assert "Plan" in body or "Тариф" in body
@@ -2203,7 +2242,7 @@ def test_the_menu_names_the_plan_for_a_free_group():
 def test_the_menu_tells_an_unpaid_large_group_that_nothing_is_deleted():
     from handlers import admin
     from storage import billing, chats
-    chats.ensure_chat(-100123, "Big")
+    chats.ensure_chat(GROUP, "Big")
     billing.set_member_count(-100123, 5000)
     body, _ = admin._menu(chats.get_chat(-100123), billing.get(-100123))
     assert "no subscription" in body
@@ -2225,26 +2264,22 @@ def test_the_start_deleting_button_appears_only_while_observing():
     assert not any(d and d.endswith(":gonow") for d in labels)
 
 
-@pytest.mark.asyncio
 async def test_pressing_start_deleting_ends_the_observation_window():
-    from handlers import admin
     from storage import chats
-    chats.ensure_chat(-100123, "G")
-    query = FakeCallback(data="cfg:-100123:gonow", user_id=7, admin=True)
-    await admin.on_config(query)
-    chat = chats.get_chat(-100123)
+    chats.ensure_chat(GROUP, "G")
+    await feed(tap(f"cfg:{GROUP}:gonow"))
+    chat = chats.get_chat(GROUP)
     assert chat.mode == "active"
     assert chats.is_observing(chat) is False
 
 
-@pytest.mark.asyncio
 async def test_a_non_admin_cannot_end_the_observation_window():
-    from handlers import admin
+    """BYSTANDER is the file's non-admin: fake_call answers GetChatMember with
+    ChatMemberAdministrator only for ADMIN."""
     from storage import chats
-    chats.ensure_chat(-100123, "G")
-    query = FakeCallback(data="cfg:-100123:gonow", user_id=7, admin=False)
-    await admin.on_config(query)
-    assert chats.is_observing(chats.get_chat(-100123)) is True
+    chats.ensure_chat(GROUP, "G")
+    await feed(tap(f"cfg:{GROUP}:gonow", user_id=BYSTANDER))
+    assert chats.is_observing(chats.get_chat(GROUP)) is True
 
 
 def test_gonow_is_an_accepted_callback_field():
@@ -2472,7 +2507,6 @@ def test_a_free_chat_is_told_nothing():
                               notified_stage=None, now=NOW) is None
 
 
-@pytest.mark.asyncio
 async def test_a_notice_is_sent_once_and_the_stage_is_recorded():
     from storage import billing, chats
     chats.ensure_chat(-100123, "G")
@@ -2491,7 +2525,6 @@ async def test_a_notice_is_sent_once_and_the_stage_is_recorded():
     assert len(bot.sent) == 1
 
 
-@pytest.mark.asyncio
 async def test_a_chat_with_nowhere_to_send_records_no_stage():
     """Otherwise the stage advances against a notice nobody received, and the
     admin is never told at all."""
@@ -2505,7 +2538,6 @@ async def test_a_chat_with_nowhere_to_send_records_no_stage():
     assert billing.get(-100123).notified_stage is None
 
 
-@pytest.mark.asyncio
 async def test_a_telegram_failure_records_no_stage_either():
     from aiogram.exceptions import TelegramAPIError
     from storage import billing, chats
@@ -2752,7 +2784,18 @@ def _dispatch():
 
 
 def cards_sent():
-    return [c for c in calls if isinstance(c, SendMessage) and c.chat_id == LOG]
+    """Review cards only.
+
+    The billing notice from Task 10 also goes to LOG, so counting every
+    SendMessage to LOG would count the notice as a second card. A review card
+    is the one carrying the rv: moderation buttons; the notice carries only a
+    subscribe URL.
+    """
+    return [c for c in calls
+            if isinstance(c, SendMessage) and c.chat_id == LOG
+            and c.reply_markup is not None
+            and any((b.callback_data or "").startswith("rv:")
+                    for row in c.reply_markup.inline_keyboard for b in row)]
 
 
 def payment_update(update_id: int, charge_id: str, stars: int) -> Update:

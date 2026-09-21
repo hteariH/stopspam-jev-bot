@@ -120,6 +120,11 @@ STRINGS: dict[str, dict[str, str]] = {
               "Message text is stored for at most 7 days in the review queue "
               "and is then erased. The audit log never stores message text.\n"
               "\n"
+              "If someone pays for a group, I keep a permanent record of who "
+              "paid, for which group and when, together with the member count "
+              "I cache for that group. That record is never deleted, because a "
+              "disputed or refunded charge cannot be looked up without it.\n"
+              "\n"
               "Any admin can switch classification off for a chat with /chats.",
         "ru": "<b>Конфиденциальность</b>\n"
               "\n"
@@ -148,6 +153,12 @@ STRINGS: dict[str, dict[str, str]] = {
               "после чего удаляется. Журнал аудита никогда не хранит текст "
               "сообщений.\n"
               "\n"
+              "Если за группу платят, я навсегда сохраняю запись о том, кто "
+              "заплатил, за какую группу и когда, вместе с числом участников, "
+              "которое я кеширую для этой группы. Эта запись не удаляется "
+              "никогда: без неё невозможно разобрать спорный платёж или "
+              "возврат.\n"
+              "\n"
               "Любой админ может отключить классификацию для чата через /chats.",
         "uk": "<b>Приватність</b>\n"
               "\n"
@@ -175,6 +186,12 @@ STRINGS: dict[str, dict[str, str]] = {
               "Текст повідомлення зберігається щонайбільше 7 днів у черзі "
               "розбору, а потім стирається. Журнал аудиту ніколи не зберігає "
               "текст повідомлень.\n"
+              "\n"
+              "Якщо за групу платять, я назавжди зберігаю запис про те, хто "
+              "заплатив, за яку групу і коли, разом із кількістю учасників, "
+              "яку я кешую для цієї групи. Цей запис не видаляється ніколи: "
+              "без нього неможливо розібрати спірний платіж або повернення "
+              "коштів.\n"
               "\n"
               "Будь-який адміністратор може вимкнути класифікацію для чату "
               "через /chats.",
@@ -250,6 +267,119 @@ STRINGS: dict[str, dict[str, str]] = {
     "btn_mode_active": {"en": "mode: active", "ru": "режим: активный", "uk": "режим: активний"},
     "btn_jev_on": {"en": "classification: on", "ru": "классификация: вкл", "uk": "класифікація: увімк"},
     "btn_jev_off": {"en": "classification: off", "ru": "классификация: выкл", "uk": "класифікація: вимк"},
+    "card_not_entitled": {
+        "en": "I would have deleted this, but this group has no subscription.",
+        "ru": "Я бы это удалил, но у группы нет подписки.",
+        "uk": "Я б це видалив, але в групи немає підписки.",
+    },
+    "btn_subscribe": {
+        "en": "Subscribe — {stars} ⭐/month",
+        "ru": "Подписка — {stars} ⭐/мес",
+        "uk": "Підписка — {stars} ⭐/міс",
+    },
+    "menu_billing": {"en": "Plan", "ru": "Тариф", "uk": "Тариф"},
+    "billing_free": {
+        "en": "free ({count} members, under {limit})",
+        "ru": "бесплатный ({count} участников, до {limit})",
+        "uk": "безкоштовний ({count} учасників, до {limit})",
+    },
+    "billing_subscribed": {
+        "en": "paid, {days} days left",
+        "ru": "оплачено, осталось дней: {days}",
+        "uk": "оплачено, залишилось днів: {days}",
+    },
+    "billing_grace": {
+        "en": "free trial, {days} days left",
+        "ru": "пробный период, осталось дней: {days}",
+        "uk": "пробний період, залишилось днів: {days}",
+    },
+    "billing_none": {
+        "en": "no subscription — I report spam but do not delete it",
+        "ru": "нет подписки — спам показываю, но не удаляю",
+        "uk": "немає підписки — спам показую, але не видаляю",
+    },
+    "btn_start_deleting": {
+        "en": "Seen enough — start deleting",
+        "ru": "Хватит наблюдать — начать удалять",
+        "uk": "Досить спостерігати — почати видаляти",
+    },
+    "invoice_title": {
+        "en": "StopSpam: auto-delete",
+        "ru": "StopSpam: автоудаление",
+        "uk": "StopSpam: автовидалення",
+    },
+    "invoice_description": {
+        "en": "Automatic deletion of spam and scam in {title}. "
+              "{stars} ⭐ every 30 days, cancel any time.",
+        "ru": "Автоматическое удаление спама и скама в {title}. "
+              "{stars} ⭐ каждые 30 дней, можно отменить в любой момент.",
+        "uk": "Автоматичне видалення спаму й шахрайства в {title}. "
+              "{stars} ⭐ кожні 30 днів, скасувати можна будь-коли.",
+    },
+    "invoice_label": {
+        "en": "30 days", "ru": "30 дней", "uk": "30 днів",
+    },
+    "pay_thanks": {
+        "en": "Payment received. I will delete spam in {title} automatically "
+              "for the next {days} days, and the subscription renews by itself.",
+        "ru": "Оплата получена. Ближайшие {days} дней я буду удалять спам "
+              "в {title} автоматически, подписка продлевается сама.",
+        "uk": "Оплату отримано. Найближчі {days} днів я видалятиму спам "
+              "у {title} автоматично, підписка подовжується сама.",
+    },
+    "pay_cancel_hint": {
+        "en": "You can cancel it in Telegram: Settings → My Stars → Subscriptions.",
+        "ru": "Отменить можно в Telegram: Настройки → Мои звёзды → Подписки.",
+        "uk": "Скасувати можна в Telegram: Налаштування → Мої зірки → Підписки.",
+    },
+    "pay_rejected": {
+        "en": "I could not recognise this invoice, so nothing was charged. "
+              "Please open the subscription button in /chats again.",
+        "ru": "Я не распознал этот счёт, деньги не списаны. "
+              "Откройте кнопку подписки в /chats ещё раз.",
+        "uk": "Я не розпізнав цей рахунок, гроші не списано. "
+              "Відкрийте кнопку підписки в /chats ще раз.",
+    },
+    "pay_unrecorded": {
+        "en": "Your payment went through, but I could not record it. "
+              "Nothing is lost — contact the bot's author with this message.",
+        "ru": "Оплата прошла, но я не смог её записать. "
+              "Ничего не потеряно — напишите автору бота, показав это сообщение.",
+        "uk": "Оплата пройшла, але я не зміг її записати. "
+              "Нічого не втрачено — напишіть автору бота, показавши це повідомлення.",
+    },
+    "invoice_unavailable": {
+        "en": "Telegram would not give me a payment link just now. Try again in a minute.",
+        "ru": "Telegram сейчас не выдал ссылку на оплату. Попробуйте через минуту.",
+        "uk": "Telegram зараз не видав посилання на оплату. Спробуйте за хвилину.",
+    },
+    "notice_grace": {
+        "en": "{title} has grown past {limit} members, so automatic deletion now "
+              "needs a subscription. It keeps working free for {days} more days.",
+        "ru": "В {title} стало больше {limit} участников, поэтому автоудаление "
+              "теперь требует подписки. Ещё {days} дней оно работает бесплатно.",
+        "uk": "У {title} стало більше {limit} учасників, тому автовидалення "
+              "тепер потребує підписки. Ще {days} днів воно працює безкоштовно.",
+    },
+    "notice_grace_ending": {
+        "en": "The free trial for {title} ends in {days} days. After that I will "
+              "keep reporting spam, but I will stop deleting it.",
+        "ru": "Пробный период для {title} заканчивается через {days} дней. "
+              "Потом я продолжу показывать спам, но перестану его удалять.",
+        "uk": "Пробний період для {title} завершується за {days} днів. "
+              "Потім я й далі показуватиму спам, але перестану його видаляти.",
+    },
+    "notice_lapsed": {
+        "en": "The subscription for {title} has ended. I am still checking every "
+              "message and still sending you these cards — I am just not deleting "
+              "anything until it is renewed.",
+        "ru": "Подписка для {title} закончилась. Я по-прежнему проверяю каждое "
+              "сообщение и присылаю карточки — просто ничего не удаляю, "
+              "пока её не продлят.",
+        "uk": "Підписка для {title} завершилася. Я й далі перевіряю кожне "
+              "повідомлення та надсилаю картки — просто нічого не видаляю, "
+              "доки її не подовжать.",
+    },
 }
 
 

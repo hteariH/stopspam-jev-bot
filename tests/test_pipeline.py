@@ -1,12 +1,16 @@
+import logging
 import os
 import tempfile
 
 import pytest
 
+from core import tiers
 from core.jev import FakeJevClient
 from core.policy import Action
 from core.state import MessageFacts
 from tests.fixtures.verdicts import CHATTER, SCAM, UNSURE
+
+ENTITLED = tiers.Entitlement(tier=tiers.FREE, active=True, reason="free_tier", price=0)
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +49,8 @@ def trust_row(**overrides):
     return trust.get(-100, 555)
 
 
-async def run(client, *, chat=None, message_facts=None, is_admin=False, can_delete=True):
+async def run(client, *, chat=None, message_facts=None, is_admin=False,
+              can_delete=True, entitlement=ENTITLED):
     from core import pipeline
     return await pipeline.evaluate(
         client,
@@ -54,6 +59,7 @@ async def run(client, *, chat=None, message_facts=None, is_admin=False, can_dele
         trust_row=trust_row(),
         is_admin=is_admin,
         can_delete=can_delete,
+        entitlement=entitlement,
     )
 
 
@@ -80,6 +86,7 @@ async def test_trusted_member_never_reaches_the_api():
     outcome = await pipeline.evaluate(
         client, chat=active_chat(), facts=facts(text="morning all"),
         trust_row=trust.get(-100, 555), is_admin=False, can_delete=True,
+        entitlement=ENTITLED,
     )
     assert outcome.skipped == "trusted"
     assert outcome.decision is None
@@ -161,3 +168,42 @@ async def test_every_evaluation_is_audited():
     row = audit.recent(-100)[0]
     assert row["action"] == "delete"
     assert row["model"] == "jev-test"
+
+
+def _unpaid():
+    return tiers.Entitlement(tier=tiers.LARGE, active=False,
+                             reason="not_entitled", price=250)
+
+
+async def test_every_successful_classification_logs_its_chat(caplog):
+    caplog.set_level(logging.INFO, logger="stopspam.pipeline")
+    await run(FakeJevClient({}, default=CHATTER))
+    lines = [r.getMessage() for r in caplog.records if r.name == "stopspam.pipeline"]
+    assert len(lines) == 1
+    assert "jev call for chat -100 " in lines[0]
+
+
+async def test_the_call_log_names_the_tier_so_free_spend_is_visible(caplog):
+    caplog.set_level(logging.INFO, logger="stopspam.pipeline")
+    await run(FakeJevClient({}, default=CHATTER), entitlement=_unpaid())
+    line = next(r.getMessage() for r in caplog.records if "jev call" in r.getMessage())
+    assert "tier=large" in line
+    assert "entitled=no" in line
+
+
+async def test_withheld_enforcement_is_logged_with_its_chat(caplog):
+    caplog.set_level(logging.INFO, logger="stopspam.pipeline")
+    outcome = await run(FakeJevClient({"buy crypto": SCAM}), entitlement=_unpaid())
+    assert outcome.decision.reason == "not_entitled"
+    assert any("enforcement withheld in chat -100" in r.getMessage()
+               for r in caplog.records)
+
+
+async def test_a_failed_call_still_produces_exactly_one_line_for_that_chat(caplog):
+    """Every call to TypeSafe produces one line naming its chat, whether it
+    succeeded or failed - otherwise spend cannot be counted from the log."""
+    caplog.set_level(logging.INFO, logger="stopspam.pipeline")
+    await run(FakeJevClient({}, fail=True))
+    lines = [r.getMessage() for r in caplog.records if r.name == "stopspam.pipeline"]
+    assert len(lines) == 1
+    assert "jev unavailable for chat -100" in lines[0]

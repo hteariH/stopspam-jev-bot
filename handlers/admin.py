@@ -9,6 +9,7 @@ configured is always looked up fresh, never read from our own database.
 import functools
 import html
 import logging
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
@@ -17,8 +18,9 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            Message)
 
-from core import guards, ratelimit
-from storage import chats
+import config
+from core import guards, offer, ratelimit, tiers
+from storage import billing, chats
 from texts import t
 
 log = logging.getLogger("stopspam.admin")
@@ -37,7 +39,7 @@ MAX_MENU_CHATS = 20
 CHATS_PER_MINUTE = 3
 _chats_limiter = ratelimit.RateLimiter(CHATS_PER_MINUTE)
 _LANGS = ("en", "ru", "uk")
-_TOGGLE_FIELDS = {"mode", "jev", "lang", "log"}
+_TOGGLE_FIELDS = {"mode", "jev", "lang", "log", "gonow"}
 _THRESHOLD_FIELDS = {"delete_threshold", "review_threshold", "confidence_floor"}
 _DELTAS = {"+", "-"}
 
@@ -99,7 +101,30 @@ def _log_chat_label(chat, lang: str) -> str:
     return t("log_chat_group", lang, chat_id=chat.log_chat_id)
 
 
-def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
+def _billing_label(chat, row, lang: str) -> str:
+    """The plan line, in words an admin can act on.
+
+    Says what is happening rather than naming a tier: "no subscription - I
+    report spam but do not delete it" is a sentence somebody can decide about,
+    where "tier: large" is not.
+    """
+    now = datetime.now(timezone.utc)
+    tier = tiers.tier_for(row.member_count)
+    if tier == tiers.FREE:
+        return t("billing_free", lang, count=row.member_count or 0,
+                 limit=config.FREE_MEMBER_LIMIT)
+    ent = tiers.build(tier, paid_until=row.paid_until,
+                      grace_until=row.grace_until, now=now)
+    if ent.reason == "subscribed":
+        return t("billing_subscribed", lang,
+                 days=tiers.days_left(row.paid_until, now=now))
+    if ent.reason == "grace":
+        return t("billing_grace", lang,
+                 days=tiers.days_left(row.grace_until, now=now))
+    return t("billing_none", lang)
+
+
+def _menu(chat, row) -> tuple[str, InlineKeyboardMarkup]:
     lang = chat.lang
     cid = chat.chat_id
     # chat.title comes from Telegram (the group's own title) and is sent
@@ -118,6 +143,7 @@ def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
         f"{review_label} ≥ {chat.review_threshold:.2f}",
         f"{t('menu_lang', lang)}: {lang}",
         f"{t('menu_log_chat', lang)}: {_log_chat_label(chat, lang)}",
+        f"{t('menu_billing', lang)}: {_billing_label(chat, row, lang)}",
     ])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=_mode_label(chat, lang), callback_data=f"cfg:{cid}:mode"),
@@ -135,6 +161,10 @@ def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(text=t("btn_log_here", lang),
                               callback_data=f"cfg:{cid}:log")],
     ])
+    if chats.is_observing(chat):
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text=t("btn_start_deleting", lang),
+                                 callback_data=f"cfg:{cid}:gonow")])
     return body, keyboard
 
 
@@ -175,14 +205,51 @@ async def on_chats(message: Message) -> None:
         await _say(message, t("no_chats"))
         return
     for chat in owned:
-        body, keyboard = _menu(chat)
-        try:
-            await message.answer(body, reply_markup=keyboard)
-        except TelegramAPIError as exc:
-            # One malformed or oversized menu must not take down /chats for
-            # every other chat this admin administers - mirrors on_config's
-            # guard around edit_text below.
-            log.warning("could not send menu for chat %s: %s", chat.chat_id, exc)
+        row = _best_effort("billing_get", chat.chat_id, billing.get,
+                           chat.chat_id) or billing.empty(chat.chat_id)
+        body, keyboard = _menu(chat, row)
+        await _send_menu(message.bot, message, chat, row, body, keyboard)
+
+
+async def _with_offer(bot, chat, row, body, keyboard) -> str:
+    """Appends the subscribe button to a rendered menu, or says why it cannot.
+
+    Both render paths go through here. _menu stays synchronous and pure - it
+    is the part that needs no Telegram call - and this is the part that does,
+    so the two callers share one answer to "is this chat being offered a
+    subscription right now?". When only /chats had it, any button press
+    handed the admin back a menu with no way to pay, at the exact moment
+    enforcement became payment-gated.
+
+    Returns the body, which may have gained a line; the keyboard is appended
+    to in place.
+    """
+    ent = tiers.build(tiers.tier_for(row.member_count), paid_until=row.paid_until,
+                      grace_until=row.grace_until, now=datetime.now(timezone.utc))
+    if ent.price and ent.reason != "subscribed":
+        url = await offer.subscribe_link(bot, chat_id=chat.chat_id,
+                                         title=chat.title or str(chat.chat_id),
+                                         stars=ent.price, lang=chat.lang)
+        if url:
+            keyboard.inline_keyboard.append([
+                InlineKeyboardButton(text=t("btn_subscribe", chat.lang, stars=ent.price),
+                                     url=url)])
+        else:
+            body += f"\n\n<i>{html.escape(t('invoice_unavailable', chat.lang))}</i>"
+    return body
+
+
+async def _send_menu(bot, message, chat, row, body, keyboard) -> None:
+    """Sends one chat's menu, with a subscribe button when one applies.
+
+    One malformed or oversized menu must not take down /chats for every other
+    chat this admin administers.
+    """
+    body = await _with_offer(bot, chat, row, body, keyboard)
+    try:
+        await message.answer(body, reply_markup=keyboard)
+    except TelegramAPIError as exc:
+        log.warning("could not send menu for chat %s: %s", chat.chat_id, exc)
 
 
 def _parse_callback(data: str):
@@ -273,9 +340,21 @@ async def on_config(query: CallbackQuery) -> None:
         updated = _best_effort(
             "update_chat", chat_id, chats.update_chat, chat_id, **{threshold_field: new_value})
         chat = updated or chat
+    elif field == "gonow":
+        # Ends the observation window on the admin's say-so. Not gated by
+        # payment: a free group can use it too. It exists because the window is
+        # otherwise unconditional, so an admin who subscribes today would get
+        # nothing for a week.
+        updated = _best_effort(
+            "update_chat", chat_id, chats.update_chat, chat_id, mode="active",
+            observe_until=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        chat = updated or chat
     # field is None: bare "cfg:<chat_id>" just re-renders the current menu.
 
-    body, keyboard = _menu(chat)
+    row = _best_effort("billing_get", chat_id, billing.get, chat_id) \
+        or billing.empty(chat_id)
+    body, keyboard = _menu(chat, row)
+    body = await _with_offer(query.bot, chat, row, body, keyboard)
     try:
         await query.message.edit_text(body, reply_markup=keyboard)
     except TelegramAPIError as exc:

@@ -7,7 +7,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
-from aiogram.methods import DeleteMessage, GetChatMember, GetMe, SendMessage
+from aiogram.methods import (CreateInvoiceLink, DeleteMessage, GetChatMember,
+                             GetChatMemberCount, GetMe, SendMessage)
 from aiogram.types import (Chat, ChatMemberLeft, ChatMemberMember, ChatMemberOwner,
                            ChatMemberUpdated, Message, Update, User)
 
@@ -16,6 +17,9 @@ from tests.fixtures.verdicts import CHATTER, SCAM
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 GROUP, SPAMMER, LOG = -100123, 555, -100999
+# A card destination every send to fails, standing in for the admin who never
+# pressed Start or who blocked the bot.
+UNREACHABLE_LOG = -100888
 ADMIN, MODCHAT = 777, -100777
 # One Dispatcher per test, built lazily and cleared by the fixture: aiogram
 # refuses to attach the same Router to two Dispatchers, so a test that feeds
@@ -29,6 +33,13 @@ unreachable: set = set()
 # rather than the owner it reports by default. Lets one test give a user
 # admin rights in one chat and not in another.
 plain_members: set = set()
+# The member count fake_call reports, and a record of how often it was asked.
+# A list rather than an int so fake_call can mutate it without `global`.
+MEMBERS = [150]
+count_calls: list = []
+# Non-empty makes the next count lookup fail, the way `unreachable` does for
+# GetChatMember.
+count_fails: list = []
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +55,9 @@ def fresh(monkeypatch):
     calls.clear()
     unreachable.clear()
     plain_members.clear()
+    MEMBERS[0] = 150
+    count_calls.clear()
+    count_fails.clear()
     _dispatcher.clear()
     # Bot.__call__ is a single class attribute shared by every test module
     # that patches it. pytest imports (collects) all test files before
@@ -69,6 +83,8 @@ async def fake_call(self, method, request_timeout=None):
     if isinstance(method, GetMe):
         return User(id=1, is_bot=True, first_name="StopSpam", username="StopSpam_jev_bot")
     if isinstance(method, SendMessage):
+        if method.chat_id == UNREACHABLE_LOG:
+            raise TelegramNetworkError(method=method, message="chat not found")
         return Message(message_id=9001, date=NOW,
                        chat=Chat(id=method.chat_id, type="supergroup"), text=method.text)
     if isinstance(method, GetChatMember):
@@ -81,6 +97,16 @@ async def fake_call(self, method, request_timeout=None):
         return ChatMemberOwner(
             user=User(id=method.user_id, is_bot=False, first_name="Boss"),
             status="creator", is_anonymous=False)
+    if isinstance(method, CreateInvoiceLink):
+        # A real link, not the bare True the fallback returns: a billing
+        # notice puts it on an InlineKeyboardButton, whose url field will not
+        # take a bool.
+        return "https://t.me/$invoice_test"
+    if isinstance(method, GetChatMemberCount):
+        count_calls.append(method)
+        if count_fails:
+            raise TelegramNetworkError(method=method, message="count failed")
+        return MEMBERS[0]
     return True
 
 
@@ -102,6 +128,10 @@ async def dispatch(update: Update):
         _dispatcher["d"] = dispatcher
     bot = Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await _dispatcher["d"].feed_update(bot, update)
+
+
+def a_bot() -> Bot:
+    return Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 async def feed(update: Update, client: FakeJevClient, *, active: bool = True,
@@ -577,3 +607,177 @@ async def test_a_locked_audit_table_does_not_cancel_the_action(monkeypatch):
     await feed(group_message("buy crypto now"), FakeJevClient({"buy crypto": SCAM}))
     assert len(deletions()) == 1
     assert len(cards_to(LOG)) == 1
+
+
+async def test_entitlement_is_free_when_the_group_is_small():
+    from core import tiers
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Small Group")
+    MEMBERS[0] = 150
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert ent.tier == tiers.FREE
+    assert ent.active is True
+
+
+async def test_a_large_unpaid_group_outside_observation_gets_grace_once():
+    from core import tiers
+    from handlers import group
+    from storage import billing, chats
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    chat = chats.get_chat(GROUP)
+    MEMBERS[0] = 5000
+
+    first, _ = await group._entitlement(a_bot(), chat)
+    assert first.tier == tiers.LARGE
+    assert (first.active, first.reason) == (True, "grace")
+
+    opened = billing.get(GROUP).grace_until
+    second, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until == opened, "grace must be set once, ever"
+    assert second.reason == "grace"
+
+
+async def test_grace_does_not_start_while_the_chat_is_still_observing():
+    """Otherwise half the trial burns during a week when nothing is deleted
+    anyway, and the admin evaluates a product they never saw working."""
+    from handlers import group
+    from storage import billing, chats
+    chat = chats.ensure_chat(GROUP, "Big New Group")  # observe_until is in the future
+    MEMBERS[0] = 5000
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until is None
+    assert ent.active is False
+
+
+async def test_the_member_count_is_not_refetched_within_the_cache_window():
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Group")
+    MEMBERS[0] = 150
+    await group._entitlement(a_bot(), chat)
+    await group._entitlement(a_bot(), chat)
+    assert len(count_calls) == 1
+
+
+async def test_a_failed_member_count_lookup_does_not_disarm_moderation():
+    """A billing lookup must never be what stops a group being moderated."""
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Group")
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert ent.active is True
+
+
+async def test_a_failed_refetch_keeps_the_cached_tier():
+    """A paying large group whose refetch fails must not silently demote to
+    free - that would hand it the service unbilled and never open grace."""
+    from core import tiers
+    from handlers import group
+    from storage import billing, chats, db
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    billing.set_member_count(GROUP, 5000)
+    # set_member_count stamps member_count_at to now, so age it past the TTL -
+    # otherwise the refetch is skipped entirely and this test proves nothing.
+    conn = db.connect()
+    conn.execute("UPDATE billing SET member_count_at = ? WHERE chat_id = ?",
+                 ("2020-01-01T00:00:00+00:00", GROUP))
+    conn.commit()
+
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chats.get_chat(GROUP))
+    assert len(count_calls) == 1, "the refetch must actually have been attempted"
+    assert ent.tier == tiers.LARGE, "a failed refetch must not demote a paying group to free"
+
+
+async def test_the_message_that_opens_grace_announces_a_trial_that_has_days_left():
+    """The row handed to notices must carry the window just opened.
+
+    _entitlement reads the billing row before it calls start_grace, so the row
+    it returns still says grace_until=None unless it is refreshed. Notices
+    computed from that read zero days left, which lands on grace_ending and
+    tells the admin "the free trial ends in 0 days" on the day it started -
+    and because stages only move forward, that one wrong notice blocks the
+    real grace and lapse notices for good.
+    """
+    from core import notices
+    from storage import billing
+    MEMBERS[0] = 5000
+
+    await feed(group_message("morning all"), FakeJevClient({}, default=CHATTER))
+
+    assert billing.get(GROUP).grace_until is not None, "grace was never opened"
+    assert billing.get(GROUP).notified_stage == notices.STAGE_GRACE, (
+        "the trial must be announced as a trial, not as one ending today")
+    body = cards_to(LOG)[-1].text
+    assert "14 more days" in body, f"wrong day count in the notice: {body!r}"
+    assert "ends in 0 days" not in body
+
+
+async def test_a_large_group_still_observing_is_told_nothing():
+    """Its first message ever reads as not_entitled, because nothing has been
+    offered to it yet. Announcing that as a lapse tells a brand-new group its
+    subscription ended, and burns the lapsed flag so no later notice can ever
+    be sent."""
+    from storage import billing
+    MEMBERS[0] = 5000
+
+    await feed(group_message("morning all"), FakeJevClient({}, default=CHATTER),
+               active=False)
+
+    assert cards_to(LOG) == [], "an observing chat was told something"
+    assert billing.get(GROUP).notified_stage is None
+
+
+async def test_a_failed_start_grace_leaves_the_chat_entitled(monkeypatch):
+    """A billing problem must never disarm moderation, and the rule is
+    unconditional: the sibling failure one branch up (a failed billing read)
+    already resolves to entitled. A None from start_grace would otherwise
+    leave grace_until unset, which builds not_entitled and stops a group being
+    enforced over a locked database."""
+    import sqlite3
+
+    from handlers import group
+    from storage import billing, chats
+
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    MEMBERS[0] = 5000
+
+    def boom(*args, **kwargs):
+        raise sqlite3.Error("database is locked")
+
+    monkeypatch.setattr(billing, "start_grace", boom)
+    ent, _ = await group._entitlement(a_bot(), chats.get_chat(GROUP))
+    assert ent.active is True, "a locked database disarmed moderation"
+    assert ent.reason == "billing_unavailable"
+
+
+async def test_notices_are_evaluated_once_per_cache_window_not_per_message():
+    """core.notices records no stage when the send fails, so nothing else
+    bounds this. For a chat whose destination is a user who blocked the bot,
+    every later message would cost a create_invoice_link plus a failing
+    send_message, forever."""
+    from storage import billing
+    MEMBERS[0] = 5000
+
+    client = FakeJevClient({}, default=CHATTER)
+    # The destination is a chat every send fails for, so the notice is never
+    # delivered and no stage is recorded - which is exactly the case nothing
+    # else bounds.
+    await feed(group_message("morning all", msg_id=1), client,
+               log_chat=UNREACHABLE_LOG)
+    assert billing.get(GROUP).notified_stage is None, (
+        "the send failed, so no stage may be recorded - otherwise this test "
+        "would be proving the stage flag rather than the cache window")
+    first = len([c for c in calls if isinstance(c, CreateInvoiceLink)])
+    assert first == 1, "the first message must evaluate the notice"
+
+    await dispatch(group_message("morning again", msg_id=2))
+    again = len([c for c in calls if isinstance(c, CreateInvoiceLink)])
+    assert again == 1, (
+        "a second message inside the same cache window evaluated the notice "
+        "again; a chat whose destination never answers would retry forever")

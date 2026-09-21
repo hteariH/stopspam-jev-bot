@@ -18,6 +18,10 @@ W_MEMBER = 0.25
 # deleted automatically, however high the rest of the signals run.
 MEMBER_CEILING = 0.30
 
+# The reason a confident deletion became a review card because the group has
+# no subscription. Named because core.cards keys the subscribe button off it.
+REASON_NOT_ENTITLED = "not_entitled"
+
 
 class Action(str, Enum):
     DELETE = "delete"
@@ -55,7 +59,7 @@ def risk_score(v: Verdict) -> float:
 
 
 def decide(v: Verdict, t: Thresholds, *, observing: bool, can_delete: bool,
-           is_admin: bool, is_allowlisted: bool) -> Decision:
+           is_admin: bool, is_allowlisted: bool, entitled: bool) -> Decision:
     if is_admin:
         return Decision(Action.IGNORE, 0.0, "admin")
     if is_allowlisted:
@@ -72,6 +76,8 @@ def decide(v: Verdict, t: Thresholds, *, observing: bool, can_delete: bool,
     if deletable:
         if observing:
             return Decision(Action.REVIEW, risk, "observing")
+        if not entitled:
+            return Decision(Action.REVIEW, risk, REASON_NOT_ENTITLED)
         if not can_delete:
             return Decision(Action.REVIEW, risk, "no_delete_permission")
         return Decision(Action.DELETE, risk, "high_confidence_spam")

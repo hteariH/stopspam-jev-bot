@@ -11,7 +11,7 @@ from aiogram.types import BotCommand
 
 import config
 from core.jev import TypeSafeJevClient
-from handlers import admin, group, review
+from handlers import admin, group, payments, review
 from storage import reviews
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -33,7 +33,10 @@ _housekeeping_task: asyncio.Task | None = None
 def build_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
     # Order matters: the group router matches every group message, so the
-    # specific routers are registered first.
+    # specific routers are registered first. Payments come first of all -
+    # nothing else claims a successful_payment today, and this states that
+    # rather than relying on it.
+    dispatcher.include_router(payments.router)
     dispatcher.include_router(admin.router)
     dispatcher.include_router(review.router)
     dispatcher.include_router(group.router)

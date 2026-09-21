@@ -18,7 +18,8 @@ SCAM = dict(is_spam=0.98, is_scam=0.99, solicits_contact=1.0,
 
 
 def ctx(**overrides):
-    base = dict(observing=False, can_delete=True, is_admin=False, is_allowlisted=False)
+    base = dict(observing=False, can_delete=True, is_admin=False,
+                is_allowlisted=False, entitled=True)
     base.update(overrides)
     return base
 
@@ -119,3 +120,49 @@ def test_thresholds_are_configurable():
     strict = Thresholds(delete=0.99, review=0.95, confidence_floor=0.99)
     d = decide(verdict(**SCAM), strict, **ctx())
     assert d.action == Action.REVIEW
+
+
+def test_unentitled_chat_reviews_what_it_would_have_deleted():
+    d = decide(verdict(**SCAM), DEFAULTS, **ctx(entitled=False))
+    assert d.action == Action.REVIEW
+    assert d.reason == "not_entitled"
+
+
+def test_entitled_chat_still_deletes():
+    assert decide(verdict(**SCAM), DEFAULTS, **ctx(entitled=True)).action == Action.DELETE
+
+
+def test_observing_is_reported_ahead_of_not_entitled():
+    """Inside the observation window nothing is deleted on any tier, so
+    advertising a subscription there would be selling something the admin does
+    not yet need."""
+    d = decide(verdict(**SCAM), DEFAULTS, **ctx(observing=True, entitled=False))
+    assert d.reason == "observing"
+
+
+def test_not_entitled_is_reported_ahead_of_missing_delete_rights():
+    """Telling an admin to buy a subscription when the real problem is that
+    they never gave the bot delete rights would be a lie - but so would the
+    reverse, and the subscription is the one the bot can actually fix."""
+    d = decide(verdict(**SCAM), DEFAULTS, **ctx(entitled=False, can_delete=False))
+    assert d.reason == "not_entitled"
+
+
+def test_entitlement_never_promotes_a_grey_zone_message():
+    """Payment buys enforcement of a verdict, never a harsher verdict."""
+    # is_spam=0.7 (the brief's literal value) computes to risk=0.545, just
+    # under the 0.55 review threshold, which lands in below_threshold/IGNORE
+    # rather than grey_zone regardless of the implementation under test.
+    # Nudged to 0.72 (risk=0.557) so the fixture actually sits in the grey
+    # band; severity_confidence=0.5 still keeps it non-deletable either way.
+    grey = verdict(is_spam=0.72, severity=1, severity_confidence=0.5, looks_like_member=0.1)
+    paid = decide(grey, DEFAULTS, **ctx(entitled=True))
+    unpaid = decide(grey, DEFAULTS, **ctx(entitled=False))
+    assert paid.action == unpaid.action == Action.REVIEW
+    assert paid.reason == unpaid.reason == "grey_zone"
+
+
+def test_entitlement_does_not_change_the_risk_score():
+    paid = decide(verdict(**SCAM), DEFAULTS, **ctx(entitled=True))
+    unpaid = decide(verdict(**SCAM), DEFAULTS, **ctx(entitled=False))
+    assert paid.risk == unpaid.risk

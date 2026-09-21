@@ -15,19 +15,21 @@ def fresh(monkeypatch):
     importlib.reload(config)
     from storage import db
     db.reset()
-    # admin.router, review.router and group.router are module-level aiogram
-    # Routers, and aiogram refuses to attach a Router that already has a
-    # parent Dispatcher. This file calls bot.build_dispatcher() from more
-    # than one test in the same process, so each router module must be
-    # reloaded here to hand every test a fresh, unattached Router - mirrors
-    # the same fixture pattern in tests/test_group_handler.py and
-    # tests/test_admin_handler.py.
+    # admin.router, review.router, group.router and payments.router are
+    # module-level aiogram Routers, and aiogram refuses to attach a Router
+    # that already has a parent Dispatcher. This file calls
+    # bot.build_dispatcher() from more than one test in the same process, so
+    # each router module must be reloaded here to hand every test a fresh,
+    # unattached Router - mirrors the same fixture pattern in
+    # tests/test_group_handler.py and tests/test_admin_handler.py.
     import handlers.admin
     import handlers.group
+    import handlers.payments
     import handlers.review
     importlib.reload(handlers.admin)
     importlib.reload(handlers.review)
     importlib.reload(handlers.group)
+    importlib.reload(handlers.payments)
     yield
     db.reset()
 
@@ -35,8 +37,12 @@ def fresh(monkeypatch):
 def test_dispatcher_includes_every_router():
     import bot
     dispatcher = bot.build_dispatcher()
-    names = {r.name for r in dispatcher.sub_routers}
-    assert {"admin", "review", "group"} <= names
+    names = [r.name for r in dispatcher.sub_routers]
+    assert {"admin", "review", "group", "payments"} <= set(names)
+    # Payments is registered first: nothing else claims a successful_payment
+    # or a pre_checkout_query today, and a dispatcher built without it would
+    # leave every payment unhandled while this suite stayed green.
+    assert names[0] == "payments"
 
 
 def test_group_router_is_last():
