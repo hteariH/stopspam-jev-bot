@@ -57,12 +57,12 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           missing=""
-          for name in VPS_HOST SSH_USERNAME SSH_PASSWORD BOT_TOKEN TYPESAFE_API_KEY; do
+          for name in VPS_HOST SSH_USERNAME SSH_PRIVATE_KEY BOT_TOKEN TYPESAFE_API_KEY; do
             if [ -z "${!name}" ]; then missing="$missing $name"; fi
           done
           if [ -n "$missing" ]; then
@@ -78,7 +78,7 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: "*.py,requirements.txt,Dockerfile,docker-compose.yml,core,handlers,storage"
           target: ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
@@ -90,11 +90,11 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD || secrets.SSH_PASSWORD }}
+          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.SSH_USERNAME }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           envs: BOT_TOKEN,TYPESAFE_API_KEY,SUDO_PASSWORD
           script_stop: true
@@ -107,14 +107,19 @@ jobs:
             DB_PATH=/data/stopspam.db
             ENVFILE
 
-            # The SSH user may not be in the docker group; fall back to sudo with the same password.
+            # Reaching the docker daemon, cheapest route first. With key-based
+            # login there is no password to feed sudo, so passwordless sudo is
+            # tried before the optional SUDO_PASSWORD secret.
             if docker info >/dev/null 2>&1; then
               DOCKER="docker"
-            elif echo "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1; then
-              DOCKER="sudo docker"
+            elif sudo -n docker info >/dev/null 2>&1; then
+              DOCKER="sudo -n docker"
               echo "note: docker needs sudo here; add the user to the docker group to skip it"
+            elif [ -n "$SUDO_PASSWORD" ] && echo "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1; then
+              DOCKER="sudo docker"
+              echo "note: docker needs sudo with a password; add the user to the docker group to skip it"
             else
-              echo "no access to the docker daemon: user is not in the docker group and sudo failed" >&2
+              echo "no access to the docker daemon: add $USER to the docker group, grant passwordless sudo, or set the SUDO_PASSWORD secret" >&2
               exit 1
             fi
 
