@@ -57,6 +57,13 @@ async def run(client, *, chat=None, message_facts=None, is_admin=False, can_dele
     )
 
 
+async def test_admin_never_reaches_the_api():
+    client = FakeJevClient({}, default=SCAM)
+    outcome = await run(client, is_admin=True)
+    assert outcome.skipped == "admin"
+    assert client.calls == []
+
+
 async def test_scam_from_newcomer_is_deleted():
     outcome = await run(FakeJevClient({"buy crypto": SCAM}))
     assert outcome.decision.action == Action.DELETE
@@ -98,6 +105,14 @@ async def test_outage_with_trigger_still_reaches_a_human():
         message_facts=facts(link_count=1, link_domains=("evil.example",)),
     )
     assert outcome.skipped == "jev_unavailable_flagged"
+
+
+async def test_outage_is_audited():
+    from storage import audit
+    await run(FakeJevClient({}, fail=True))
+    row = audit.recent(-100)[0]
+    assert row["action"] == "failed"
+    assert row["reason"] == "jev_unavailable"
 
 
 async def test_uncertain_verdict_is_reviewed():
