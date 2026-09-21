@@ -500,3 +500,80 @@ async def test_a_captioned_photo_is_still_checked():
         caption="buy crypto now", photo=[])))
     assert client.calls, "a caption is the message, and must still be checked"
     assert len(deletions()) == 1
+
+
+async def test_a_confident_deletion_survives_a_locked_review_table(monkeypatch):
+    """core.actions._best_effort's whole contract: a decision already made
+    must reach Telegram even when sqlite is locked. The review row only
+    decides whether the card can carry buttons bound to it, so without a row
+    the card still goes out - it just cannot offer Delete, Ban or Not spam.
+
+    Production edit this catches: calling reviews.create directly instead of
+    through _best_effort (the sqlite3.Error then escapes apply() and the
+    handler, and the message is never deleted), or making the card
+    conditional on review_id (the deletion would go unreported).
+    """
+    import sqlite3
+
+    from storage import reviews
+
+    def boom(*args, **kwargs):
+        raise sqlite3.Error("database is locked")
+
+    monkeypatch.setattr(reviews, "create", boom)
+    await feed(group_message("buy crypto now"), FakeJevClient({"buy crypto": SCAM}))
+    assert len(deletions()) == 1, "a confident deletion still happens"
+    assert len(cards_to(LOG)) == 1, "and is still reported"
+    assert cards_to(LOG)[0].reply_markup is None, (
+        "buttons would be bound to a review row that does not exist")
+
+
+async def test_a_message_is_skipped_when_the_chat_row_cannot_be_read(monkeypatch):
+    """Without a chat config there are no thresholds, no mode and no
+    destination, so there is nothing to decide with. The handler skips the
+    message rather than guessing - and skipping means not deleting.
+
+    Production edit this catches: removing the try/except sqlite3.Error
+    around ensure_chat/trust.seen in on_group_message, which lets the error
+    escape the handler, or moving the evaluation above it.
+    """
+    import sqlite3
+
+    from storage import chats
+
+    def boom(*args, **kwargs):
+        raise sqlite3.Error("database is locked")
+
+    from handlers import group
+    # The chat is set up first, exactly as feed() would, so the only thing
+    # this test changes is the read that happens inside the handler.
+    chats.ensure_chat(GROUP, "Python Chat")
+    chats.update_chat(GROUP, log_chat_id=LOG, mode="active",
+                      observe_until="2020-01-01T00:00:00+00:00")
+    client = FakeJevClient({"buy crypto": SCAM})
+    group.set_client(client)
+
+    monkeypatch.setattr(chats, "ensure_chat", boom)
+    await dispatch(group_message("buy crypto now"))
+    assert deletions() == [], "no delete is attempted without a chat config"
+    assert cards_to(LOG) == []
+    assert client.calls == [], "and no classifier call is spent either"
+
+
+async def test_a_locked_audit_table_does_not_cancel_the_action(monkeypatch):
+    """The audit row is the record of a decision, not a precondition for it.
+
+    Production edit this catches: calling audit.record directly in
+    core.actions.apply instead of through _best_effort.
+    """
+    import sqlite3
+
+    from storage import audit
+
+    def boom(*args, **kwargs):
+        raise sqlite3.Error("database is locked")
+
+    monkeypatch.setattr(audit, "record", boom)
+    await feed(group_message("buy crypto now"), FakeJevClient({"buy crypto": SCAM}))
+    assert len(deletions()) == 1
+    assert len(cards_to(LOG)) == 1
