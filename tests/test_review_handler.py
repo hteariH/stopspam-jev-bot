@@ -215,3 +215,27 @@ async def test_unknown_verb_is_answered_not_crashed():
     assert reviews.get(rid)["decision"] is None
     assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
     assert answers()
+
+
+async def test_callback_data_id_too_large_for_sqlite_is_answered_not_crashed():
+    # Python ints are arbitrary precision, so this parses fine with int() -
+    # but it is far outside SQLite's signed 64-bit INTEGER range, and
+    # sqlite3 raises OverflowError (not a sqlite3.Error subclass) trying to
+    # bind it as a parameter. This must be rejected before ever reaching
+    # reviews.get(), not caught after the fact.
+    await feed(press_raw("rv:ban:" + "9" * 40))
+    assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
+    assert answers()
+
+
+async def test_negative_id_is_answered_not_crashed():
+    # A negative id is never produced by a real card (review ids come from
+    # an AUTOINCREMENT primary key starting at 1), but unlike an
+    # out-of-range id it doesn't need a dedicated rejection: it parses fine,
+    # sits well within SQLite's INTEGER range, and reviews.get() simply
+    # finds no matching row, which is already handled as "already_handled"
+    # below. This test documents that this path is safe, not that it needs
+    # a new guard.
+    await feed(press_raw("rv:ban:-5"))
+    assert not [c for c in calls if isinstance(c, (DeleteMessage, BanChatMember))]
+    assert answers()

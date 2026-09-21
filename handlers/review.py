@@ -24,6 +24,16 @@ ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
 _DECISION = {"ban": "delete_ban", "del": "delete", "ok": "not_spam"}
 _DONE_TEXT = {"ban": "done_ban", "del": "done_delete", "ok": "done_not_spam"}
 
+# SQLite's INTEGER column is a signed 64-bit value. Python ints are
+# arbitrary precision, so a digit-only id outside this range parses fine
+# with int() but then makes sqlite3 raise OverflowError when it tries to
+# bind the parameter - an exception reviews.get() can't be wrapped against
+# without asking the database a question that can never have an answer. No
+# real review id can be outside this range anyway (they come from an
+# AUTOINCREMENT primary key), so it is rejected here, at validation time.
+_SQLITE_INT_MIN = -(2**63)
+_SQLITE_INT_MAX = 2**63 - 1
+
 
 def _best_effort(what: str, chat_id: int, fn, *args, **kwargs):
     """Runs a storage call without letting a DB failure escape the handler.
@@ -64,6 +74,9 @@ async def on_card_button(query: CallbackQuery) -> None:
     try:
         review_id = int(raw_id)
     except ValueError:
+        await query.answer(t("already_handled"))
+        return
+    if not (_SQLITE_INT_MIN <= review_id <= _SQLITE_INT_MAX):
         await query.answer(t("already_handled"))
         return
 
