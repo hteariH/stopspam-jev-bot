@@ -10,7 +10,7 @@ from aiogram.filters import Command
 from aiogram.types import ChatMemberUpdated, Message
 
 import config
-from core import actions, guards, pipeline, ratelimit, state, tiers
+from core import actions, guards, notices, pipeline, ratelimit, state, tiers
 from core.jev import JevClient
 from storage import billing, chats, trust
 from texts import t
@@ -237,6 +237,9 @@ async def on_group_message(message: Message) -> None:
     is_admin = check is guards.AdminCheck.ADMIN
     can_delete = await _can_delete(message.bot, message.chat.id)
     entitlement, billing_row = await _entitlement(message.bot, chat)
+    if billing_row is not None:
+        await notices.maybe_notify(message.bot, chat=chat, row=billing_row,
+                                   entitlement=entitlement)
 
     outcome = await pipeline.evaluate(
         _client,
