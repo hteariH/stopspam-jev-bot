@@ -268,3 +268,48 @@ async def test_the_budget_is_per_user_not_global():
     calls.clear()
     await feed(dm("/chats"))
     assert "Too many requests" not in sent()[-1].text
+
+
+async def test_the_log_button_redirects_cards_to_the_pressing_admin():
+    """Lets a second admin take the review queue over from whoever added the
+    bot, without anyone touching the database.
+
+    Production edit this catches: removing the "log" arm of on_config, or
+    dropping "log" from _TOGGLE_FIELDS - the button then silently re-renders
+    the menu and changes nothing.
+    """
+    from storage import chats
+    assert chats.get_chat(GROUP).log_chat_id is None
+    await feed(tap(f"cfg:{GROUP}:log"))
+    assert chats.get_chat(GROUP).log_chat_id == ADMIN
+
+
+async def test_a_non_admin_cannot_claim_the_review_queue():
+    """The cards quote the group's messages, so pointing them at yourself is
+    an admin-only action like every other one in this menu."""
+    from storage import chats
+    await feed(tap(f"cfg:{GROUP}:log", user_id=BYSTANDER))
+    assert chats.get_chat(GROUP).log_chat_id is None
+
+
+async def test_the_menu_says_where_cards_go_when_nowhere():
+    """The menu used to print an em dash for the log chat, which is what
+    every real chat showed, and read like an unset nicety rather than the
+    reason cards were landing in the moderated group.
+
+    Production edit this catches: restoring
+    `{chat.log_chat_id or '—'}` in _menu.
+    """
+    await feed(dm("/chats"))
+    body = sent()[-1].text
+    line = body.split("Review cards go to")[1].splitlines()[0]
+    assert "no destination is set" in line
+    assert "cards are not delivered" in line
+
+
+async def test_the_menu_names_the_admin_whose_dm_receives_the_cards():
+    from storage import chats
+    chats.update_chat(GROUP, log_chat_id=ADMIN)
+    await feed(dm("/chats"))
+    body = sent()[-1].text
+    assert f"admin {ADMIN}" in body

@@ -108,8 +108,40 @@ STRINGS: dict[str, dict[str, str]] = {
         "ru": "проверка",
     },
     "menu_log_chat": {
-        "en": "Log chat",
-        "ru": "Чат для журнала",
+        "en": "Review cards go to",
+        "ru": "Карточки проверки приходят",
+    },
+    "log_chat_unset": {
+        "en": "nowhere — no destination is set, so cards are not delivered",
+        "ru": "никуда — адресат не задан, карточки не отправляются",
+    },
+    "log_chat_dm": {
+        "en": "a private chat with admin {user_id}",
+        "ru": "в личный чат с админом {user_id}",
+    },
+    "log_chat_group": {
+        "en": "chat {chat_id}",
+        "ru": "в чат {chat_id}",
+    },
+    "btn_log_here": {
+        "en": "send cards to me",
+        "ru": "присылать карточки мне",
+    },
+    "setlog_not_admin": {
+        "en": "Only an admin of this chat can use /setlog.",
+        "ru": "Команду /setlog может использовать только админ этого чата.",
+    },
+    "setlog_done": {
+        "en": "Done. Review cards now come here. Groups redirected: {count}.",
+        "ru": "Готово. Карточки проверки теперь приходят сюда. "
+              "Перенаправлено групп: {count}.",
+    },
+    "setlog_none": {
+        "en": "I found no group of yours to redirect here. Post a message in that "
+              "group first so I know you are in it, then run /setlog here again.",
+        "ru": "Не нашёл ваших групп, которые можно сюда перенаправить. Сначала "
+              "напишите сообщение в нужной группе, чтобы я знал, что вы в ней, "
+              "затем снова выполните /setlog здесь.",
     },
     "menu_not_admin": {
         "en": "You are not an admin of that chat.",

@@ -37,7 +37,7 @@ MAX_MENU_CHATS = 20
 CHATS_PER_MINUTE = 3
 _chats_limiter = ratelimit.RateLimiter(CHATS_PER_MINUTE)
 _LANGS = ("en", "ru")
-_TOGGLE_FIELDS = {"mode", "jev", "lang"}
+_TOGGLE_FIELDS = {"mode", "jev", "lang", "log"}
 _THRESHOLD_FIELDS = {"delete_threshold", "review_threshold", "confidence_floor"}
 _DELTAS = {"+", "-"}
 
@@ -82,6 +82,23 @@ def _jev_label(chat, lang: str) -> str:
     return t("btn_jev_off" if chat.jev_enabled else "btn_jev_on", lang)
 
 
+def _log_chat_label(chat, lang: str) -> str:
+    """Says where this chat's cards actually go, in words.
+
+    The menu used to print the raw log_chat_id or an em dash, and an em dash
+    was what every real chat showed, since nothing wrote the column. It read
+    like a setting nobody had bothered with, when it was in fact the reason
+    cards were landing in the moderated group. Telegram user ids are positive
+    and chat ids are negative, which is what distinguishes an admin's DM from
+    a moderator group here.
+    """
+    if chat.log_chat_id is None or chat.log_chat_id == chat.chat_id:
+        return t("log_chat_unset", lang)
+    if chat.log_chat_id > 0:
+        return t("log_chat_dm", lang, user_id=chat.log_chat_id)
+    return t("log_chat_group", lang, chat_id=chat.log_chat_id)
+
+
 def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
     lang = chat.lang
     cid = chat.chat_id
@@ -100,7 +117,7 @@ def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
         f"{t('menu_thresholds', lang)}: {delete_label} ≥ {chat.delete_threshold:.2f}, "
         f"{review_label} ≥ {chat.review_threshold:.2f}",
         f"{t('menu_lang', lang)}: {lang}",
-        f"{t('menu_log_chat', lang)}: {chat.log_chat_id or '—'}",
+        f"{t('menu_log_chat', lang)}: {_log_chat_label(chat, lang)}",
     ])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=_mode_label(chat, lang), callback_data=f"cfg:{cid}:mode"),
@@ -115,6 +132,8 @@ def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
                               callback_data=f"cfg:{cid}:thr:review_threshold:+")],
         [InlineKeyboardButton(text=f"{t('menu_lang', lang)}: {lang}",
                               callback_data=f"cfg:{cid}:lang")],
+        [InlineKeyboardButton(text=t("btn_log_here", lang),
+                              callback_data=f"cfg:{cid}:log")],
     ])
     return body, keyboard
 
@@ -225,6 +244,14 @@ async def on_config(query: CallbackQuery) -> None:
     elif field == "lang":
         nxt = _LANGS[(_LANGS.index(chat.lang) + 1) % len(_LANGS)] if chat.lang in _LANGS else "en"
         updated = _best_effort("update_chat", chat_id, chats.update_chat, chat_id, lang=nxt)
+        chat = updated or chat
+    elif field == "log":
+        # Redirects this chat's cards to the presser's own DM, so a second
+        # admin can take the queue over from whoever added the bot. Their
+        # admin rights for this chat were verified against Telegram above.
+        updated = _best_effort(
+            "update_chat", chat_id, chats.update_chat, chat_id,
+            log_chat_id=query.from_user.id)
         chat = updated or chat
     elif field == "thr":
         threshold_field, delta = extra

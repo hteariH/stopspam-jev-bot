@@ -39,6 +39,29 @@ bot. Nothing about crossing day 7 turns enforcement on by itself. A chat can
 also be put back into observe mode at any time, and classification itself
 can be switched off entirely per chat.
 
+## Where review cards go
+
+Everything the bot is unsure about becomes a **review card**: the message
+text, its author, why the bot fired, and buttons to delete, delete and ban,
+or mark it as not spam. A card quotes the message it is about, so it is
+never posted into the group being moderated — that would republish the spam
+to everyone and hand every member the moderation buttons.
+
+Cards go to a private destination instead:
+
+- When you add the bot to a group, cards for that group go to **your** direct
+  messages with it, from the first message onwards.
+- Another admin can take the queue over from the `/chats` menu, which points
+  that group's cards at their own direct messages.
+- To send cards to a dedicated moderator group instead, add the bot there and
+  run `/setlog` in it. Every group you administer that the bot knows you are
+  in will post its cards there from then on. You must be an admin of both the
+  moderator group and the groups being redirected.
+
+If a group somehow has no destination, the card is skipped and the reason is
+logged. The bot does not fall back to the group itself. The audit row still
+records what was decided, so nothing is lost silently.
+
 ## How it decides
 
 Every checked message is sent to the TypeSafe Jev API, which answers a

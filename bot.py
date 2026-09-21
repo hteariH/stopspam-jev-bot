@@ -88,6 +88,8 @@ async def main() -> None:
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await bot.set_my_commands([
         BotCommand(command="chats", description="Configure your groups"),
+        BotCommand(command="setlog",
+                   description="Send review cards to this chat (group admins)"),
         BotCommand(command="privacy", description="What data the bot sends and keeps"),
         BotCommand(command="help", description="How this bot works"),
     ])
