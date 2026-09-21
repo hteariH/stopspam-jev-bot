@@ -25,15 +25,6 @@ ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
 def set_client(client: JevClient) -> None:
     global _client
     _client = client
-    # Detach the router from whatever Dispatcher it was last included into.
-    # In the running bot this is a no-op: set_client runs once at startup,
-    # before include_router. Tests call it once per case, each time building
-    # a fresh Dispatcher, and aiogram refuses to attach a router that already
-    # has a parent - so without this, only the first test in the process
-    # would ever get past include_router.
-    if router.parent_router is not None:
-        router.parent_router.sub_routers.remove(router)
-        router._parent_router = None
 
 
 async def _is_admin(bot, chat_id: int, user_id: int) -> bool:

@@ -28,6 +28,14 @@ def fresh(monkeypatch):
     from storage import db
     db.reset()
     calls.clear()
+    # handlers.group's `router` is a module-level aiogram Router, and aiogram
+    # refuses to attach a Router that already has a parent Dispatcher. Each
+    # test below builds its own Dispatcher and includes handlers.group.router,
+    # so the module must be reloaded here to hand every test a fresh, unattached
+    # Router — otherwise only the first test to run in this process would ever
+    # get past dispatcher.include_router().
+    import handlers.group
+    importlib.reload(handlers.group)
     yield
     db.reset()
 
