@@ -3,7 +3,7 @@ import functools
 import logging
 from dataclasses import dataclass
 
-from core import gate, guards, policy, state
+from core import gate, guards, policy, state, tiers
 from core.jev import JevClient, JevError
 from core.policy import Action, Decision, Thresholds
 from core.state import MessageFacts
@@ -27,6 +27,7 @@ class Outcome:
     verdict: Verdict | None
     facts: MessageFacts | None
     skipped: str | None
+    entitlement: tiers.Entitlement | None = None
 
 
 # evaluate()'s contract is "never raises": a moderation decision must reach
@@ -37,7 +38,8 @@ _best_effort = functools.partial(guards.best_effort, log)
 
 
 async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
-                   trust_row: TrustRow, is_admin: bool, can_delete: bool) -> Outcome:
+                   trust_row: TrustRow, is_admin: bool, can_delete: bool,
+                   entitlement: tiers.Entitlement) -> Outcome:
     if is_admin:
         return Outcome(None, None, facts, "admin")
 
@@ -70,6 +72,7 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
         can_delete=can_delete,
         is_admin=False,
         is_allowlisted=trust_row.status == trust.ALLOWLISTED,
+        entitled=entitlement.active,
     )
 
     if decision.action == Action.IGNORE:
@@ -82,4 +85,4 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
     _best_effort("audit", chat.chat_id, audit.record,
                  chat.chat_id, trust_row.user_id, None, decision.risk,
                  decision.action.value, decision.reason, model=verdict.model)
-    return Outcome(decision, verdict, facts, None)
+    return Outcome(decision, verdict, facts, None, entitlement)

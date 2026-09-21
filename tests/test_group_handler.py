@@ -7,7 +7,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
-from aiogram.methods import DeleteMessage, GetChatMember, GetMe, SendMessage
+from aiogram.methods import (DeleteMessage, GetChatMember, GetChatMemberCount, GetMe,
+                             SendMessage)
 from aiogram.types import (Chat, ChatMemberLeft, ChatMemberMember, ChatMemberOwner,
                            ChatMemberUpdated, Message, Update, User)
 
@@ -29,6 +30,13 @@ unreachable: set = set()
 # rather than the owner it reports by default. Lets one test give a user
 # admin rights in one chat and not in another.
 plain_members: set = set()
+# The member count fake_call reports, and a record of how often it was asked.
+# A list rather than an int so fake_call can mutate it without `global`.
+MEMBERS = [150]
+count_calls: list = []
+# Non-empty makes the next count lookup fail, the way `unreachable` does for
+# GetChatMember.
+count_fails: list = []
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +52,9 @@ def fresh(monkeypatch):
     calls.clear()
     unreachable.clear()
     plain_members.clear()
+    MEMBERS[0] = 150
+    count_calls.clear()
+    count_fails.clear()
     _dispatcher.clear()
     # Bot.__call__ is a single class attribute shared by every test module
     # that patches it. pytest imports (collects) all test files before
@@ -81,6 +92,11 @@ async def fake_call(self, method, request_timeout=None):
         return ChatMemberOwner(
             user=User(id=method.user_id, is_bot=False, first_name="Boss"),
             status="creator", is_anonymous=False)
+    if isinstance(method, GetChatMemberCount):
+        count_calls.append(method)
+        if count_fails:
+            raise TelegramNetworkError(method=method, message="count failed")
+        return MEMBERS[0]
     return True
 
 
@@ -102,6 +118,10 @@ async def dispatch(update: Update):
         _dispatcher["d"] = dispatcher
     bot = Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await _dispatcher["d"].feed_update(bot, update)
+
+
+def a_bot() -> Bot:
+    return Bot("123:abc", default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 async def feed(update: Update, client: FakeJevClient, *, active: bool = True,
@@ -577,3 +597,65 @@ async def test_a_locked_audit_table_does_not_cancel_the_action(monkeypatch):
     await feed(group_message("buy crypto now"), FakeJevClient({"buy crypto": SCAM}))
     assert len(deletions()) == 1
     assert len(cards_to(LOG)) == 1
+
+
+async def test_entitlement_is_free_when_the_group_is_small():
+    from core import tiers
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Small Group")
+    MEMBERS[0] = 150
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert ent.tier == tiers.FREE
+    assert ent.active is True
+
+
+async def test_a_large_unpaid_group_outside_observation_gets_grace_once():
+    from core import tiers
+    from handlers import group
+    from storage import billing, chats
+    chats.ensure_chat(GROUP, "Big Group")
+    chats.update_chat(GROUP, mode="active", observe_until="2020-01-01T00:00:00+00:00")
+    chat = chats.get_chat(GROUP)
+    MEMBERS[0] = 5000
+
+    first, _ = await group._entitlement(a_bot(), chat)
+    assert first.tier == tiers.LARGE
+    assert (first.active, first.reason) == (True, "grace")
+
+    opened = billing.get(GROUP).grace_until
+    second, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until == opened, "grace must be set once, ever"
+    assert second.reason == "grace"
+
+
+async def test_grace_does_not_start_while_the_chat_is_still_observing():
+    """Otherwise half the trial burns during a week when nothing is deleted
+    anyway, and the admin evaluates a product they never saw working."""
+    from handlers import group
+    from storage import billing, chats
+    chat = chats.ensure_chat(GROUP, "Big New Group")  # observe_until is in the future
+    MEMBERS[0] = 5000
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert billing.get(GROUP).grace_until is None
+    assert ent.active is False
+
+
+async def test_the_member_count_is_not_refetched_within_the_cache_window():
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Group")
+    MEMBERS[0] = 150
+    await group._entitlement(a_bot(), chat)
+    await group._entitlement(a_bot(), chat)
+    assert len(count_calls) == 1
+
+
+async def test_a_failed_member_count_lookup_does_not_disarm_moderation():
+    """A billing lookup must never be what stops a group being moderated."""
+    from handlers import group
+    from storage import chats
+    chat = chats.ensure_chat(GROUP, "Group")
+    count_fails.append(True)
+    ent, _ = await group._entitlement(a_bot(), chat)
+    assert ent.active is True

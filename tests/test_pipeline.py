@@ -3,10 +3,13 @@ import tempfile
 
 import pytest
 
+from core import tiers
 from core.jev import FakeJevClient
 from core.policy import Action
 from core.state import MessageFacts
 from tests.fixtures.verdicts import CHATTER, SCAM, UNSURE
+
+ENTITLED = tiers.Entitlement(tier=tiers.FREE, active=True, reason="free_tier", price=0)
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +48,8 @@ def trust_row(**overrides):
     return trust.get(-100, 555)
 
 
-async def run(client, *, chat=None, message_facts=None, is_admin=False, can_delete=True):
+async def run(client, *, chat=None, message_facts=None, is_admin=False,
+              can_delete=True, entitlement=ENTITLED):
     from core import pipeline
     return await pipeline.evaluate(
         client,
@@ -54,6 +58,7 @@ async def run(client, *, chat=None, message_facts=None, is_admin=False, can_dele
         trust_row=trust_row(),
         is_admin=is_admin,
         can_delete=can_delete,
+        entitlement=entitlement,
     )
 
 
@@ -80,6 +85,7 @@ async def test_trusted_member_never_reaches_the_api():
     outcome = await pipeline.evaluate(
         client, chat=active_chat(), facts=facts(text="morning all"),
         trust_row=trust.get(-100, 555), is_admin=False, can_delete=True,
+        entitlement=ENTITLED,
     )
     assert outcome.skipped == "trusted"
     assert outcome.decision is None

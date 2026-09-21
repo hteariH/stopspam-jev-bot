@@ -1,6 +1,7 @@
 """Every group message passes through here."""
 import logging
 import sqlite3
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -9,9 +10,9 @@ from aiogram.filters import Command
 from aiogram.types import ChatMemberUpdated, Message
 
 import config
-from core import actions, guards, pipeline, ratelimit, state
+from core import actions, guards, pipeline, ratelimit, state, tiers
 from core.jev import JevClient
-from storage import chats, trust
+from storage import billing, chats, trust
 from texts import t
 
 log = logging.getLogger("stopspam.group")
@@ -61,6 +62,56 @@ async def _can_delete(bot, chat_id: int) -> bool:
     if me.status == ChatMemberStatus.CREATOR:
         return True
     return bool(getattr(me, "can_delete_messages", False))
+
+
+async def _member_count(bot, chat_id: int, row) -> int | None:
+    """The group's size, refetched at most once per cache window.
+
+    A failed lookup returns the cached value, including None. That is the
+    free tier, and it is the right way to fail: a billing lookup must never
+    be what stops a group from being moderated.
+    """
+    if not tiers.count_is_stale(row.member_count_at, now=datetime.now(timezone.utc)):
+        return row.member_count
+    try:
+        count = await bot.get_chat_member_count(chat_id)
+    except TelegramAPIError as exc:
+        log.warning("member count lookup failed for chat %s: %s", chat_id, exc)
+        return row.member_count
+    guards.best_effort(log, "set_member_count", chat_id,
+                       billing.set_member_count, chat_id, count)
+    return count
+
+
+async def _entitlement(bot, chat) -> tuple[tiers.Entitlement, billing.BillingRow | None]:
+    """Whether this chat may have spam deleted automatically, and why.
+
+    Returns the billing row alongside it so the caller can decide whether a
+    notice is due without reading the same row twice. The row is None only
+    when storage failed.
+
+    Also the only place the free trial is opened. The trial starts on the
+    first message where the tier requires payment *and* the chat is out of
+    its observation window: starting it earlier would burn half the window
+    during a week in which the bot deletes nothing anyway.
+    """
+    now = datetime.now(timezone.utc)
+    row = guards.best_effort(log, "billing_get", chat.chat_id, billing.get, chat.chat_id)
+    if row is None:
+        # Storage failed. The verdict is unaffected; only the question of
+        # permission failed, and a lost subscription beats a group silently
+        # going unmoderated.
+        return tiers.Entitlement(tier=tiers.FREE, active=True,
+                                 reason="billing_unavailable", price=0), None
+
+    tier = tiers.tier_for(await _member_count(bot, chat.chat_id, row))
+    grace_until = row.grace_until
+    if tier != tiers.FREE and grace_until is None and not chats.is_observing(chat):
+        grace_until = guards.best_effort(log, "start_grace", chat.chat_id,
+                                         billing.start_grace, chat.chat_id)
+
+    return tiers.build(tier, paid_until=row.paid_until,
+                       grace_until=grace_until, now=now), row
 
 
 @router.my_chat_member()
@@ -185,6 +236,7 @@ async def on_group_message(message: Message) -> None:
         return
     is_admin = check is guards.AdminCheck.ADMIN
     can_delete = await _can_delete(message.bot, message.chat.id)
+    entitlement, billing_row = await _entitlement(message.bot, chat)
 
     outcome = await pipeline.evaluate(
         _client,
@@ -193,6 +245,7 @@ async def on_group_message(message: Message) -> None:
         trust_row=row,
         is_admin=is_admin,
         can_delete=can_delete,
+        entitlement=entitlement,
     )
 
     await actions.apply(message.bot, message=message, outcome=outcome,
