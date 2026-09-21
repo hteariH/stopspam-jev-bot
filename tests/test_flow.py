@@ -113,7 +113,9 @@ async def test_full_flow():
     assert len(group._client.calls) == before
 
     # 4. An admin reverses the original call from the card.
-    review_id = db.connect().execute("SELECT id FROM reviews").fetchone()["id"]
+    review_id = db.connect().execute(
+        "SELECT id FROM reviews WHERE chat_id = ? AND user_id = ?",
+        (GROUP, SPAMMER)).fetchone()["id"]
     card = Message(message_id=9001, date=NOW, chat=Chat(id=LOG, type="supergroup"),
                    text="card")
     await dispatcher.feed_update(telegram, Update(update_id=30, callback_query=CallbackQuery(
@@ -121,7 +123,11 @@ async def test_full_flow():
         chat_instance="ci", message=card, data=f"rv:ok:{review_id}")))
     assert trust.get(GROUP, SPAMMER).status == "allowlisted"
 
-    # 5. The reversed user is now left alone even when posting the same text.
+    # 5. The reversed user is now left alone even when posting the same text -
+    # not just no deletion, but no API call at all, the same way step 3
+    # proves a trusted member costs no call.
     calls.clear()
+    before = len(group._client.calls)
     await dispatcher.feed_update(telegram, group_message("buy crypto now", SPAMMER, 40))
     assert deletions() == [], "an allowlisted user must never be acted upon"
+    assert len(group._client.calls) == before, "an allowlisted user must never reach the API"
