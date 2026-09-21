@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 
 import config
-from core import actions, pipeline, state
+from core import actions, guards, pipeline, state
 from core.jev import JevClient
 from storage import chats, trust
 
@@ -20,20 +20,10 @@ router.message.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 _client: JevClient | None = None
 _limiter = actions.EnforcementLimiter(config.ENFORCEMENT_PER_MINUTE)
 
-ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
-
 
 def set_client(client: JevClient) -> None:
     global _client
     _client = client
-
-
-async def _is_admin(bot, chat_id: int, user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-    except TelegramAPIError:
-        return False
-    return member.status in ADMIN_STATUSES
 
 
 async def _can_delete(bot, chat_id: int) -> bool:
@@ -67,7 +57,7 @@ async def on_group_message(message: Message) -> None:
         group_description="",
     )
 
-    is_admin = await _is_admin(message.bot, message.chat.id, message.from_user.id)
+    is_admin = await guards.is_admin(message.bot, message.chat.id, message.from_user.id)
     can_delete = await _can_delete(message.bot, message.chat.id)
 
     outcome = await pipeline.evaluate(

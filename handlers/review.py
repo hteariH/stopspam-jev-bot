@@ -5,14 +5,15 @@ admins of the group the card is about. Every press is therefore checked
 against Telegram, for the chat the review belongs to - never the chat the
 card happens to be sitting in, and never a value cached in the database.
 """
+import functools
 import logging
 import sqlite3
 
 from aiogram import F, Router
-from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery
 
+from core import guards
 from storage import audit, chats, reviews, trust
 from texts import t
 
@@ -20,7 +21,6 @@ log = logging.getLogger("stopspam.review")
 
 router = Router(name="review")
 
-ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
 _DECISION = {"ban": "delete_ban", "del": "delete", "ok": "not_spam"}
 _DONE_TEXT = {"ban": "done_ban", "del": "done_delete", "ok": "done_not_spam"}
 
@@ -35,28 +35,9 @@ _SQLITE_INT_MIN = -(2**63)
 _SQLITE_INT_MAX = 2**63 - 1
 
 
-def _best_effort(what: str, chat_id: int, fn, *args, **kwargs):
-    """Runs a storage call without letting a DB failure escape the handler.
-
-    Mirrors core.pipeline._best_effort and core.actions._best_effort: a card
-    press must always get an answer back to the admin's client, even if
-    sqlite is locked or the disk is full. Losing one row here (a resolved
-    decision, a trust bump, an audit line) is the acceptable trade against a
-    callback query that times out with no response at all.
-    """
-    try:
-        return fn(*args, **kwargs)
-    except sqlite3.Error as exc:
-        log.warning("storage call failed (%s) for chat %s: %s", what, chat_id, exc)
-        return None
-
-
-async def _is_admin(bot, chat_id: int, user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-    except TelegramAPIError:
-        return False
-    return member.status in ADMIN_STATUSES
+# A card press must always get an answer back to the admin's client, even if
+# sqlite is locked or the disk is full.
+_best_effort = functools.partial(guards.best_effort, log)
 
 
 @router.callback_query(F.data.startswith("rv:"))
@@ -99,7 +80,7 @@ async def on_card_button(query: CallbackQuery) -> None:
         await query.answer(t("already_handled", lang))
         return
 
-    if not await _is_admin(query.bot, review["chat_id"], query.from_user.id):
+    if not await guards.is_admin(query.bot, review["chat_id"], query.from_user.id):
         await query.answer(t("not_admin", lang), show_alert=True)
         return
 

@@ -1,9 +1,9 @@
 """update -> gate -> state -> jev -> policy. Failure always resolves downward."""
+import functools
 import logging
-import sqlite3
 from dataclasses import dataclass
 
-from core import gate, policy, state
+from core import gate, guards, policy, state
 from core.jev import JevClient, JevError
 from core.policy import Action, Decision, Thresholds
 from core.state import MessageFacts
@@ -23,20 +23,11 @@ class Outcome:
     skipped: str | None
 
 
-def _best_effort(what: str, chat_id: int, fn, *args, **kwargs) -> None:
-    """Runs a storage write without letting a DB failure escape evaluate().
-
-    evaluate()'s contract is "never raises": a moderation decision must reach
-    the caller even if sqlite is locked, the disk is full, or the schema has
-    drifted. Losing one row here (a flagged status, a trust bump, an audit
-    line) is an acceptable trade against silently dropping the message from
-    moderation entirely. The warning below is what keeps a persistent storage
-    problem from going unnoticed, since the meter row itself is gone either way.
-    """
-    try:
-        fn(*args, **kwargs)
-    except sqlite3.Error as exc:
-        log.warning("storage write failed (%s) for chat %s: %s", what, chat_id, exc)
+# evaluate()'s contract is "never raises": a moderation decision must reach
+# the caller even if sqlite is locked, the disk is full, or the schema has
+# drifted. Nothing here reads the result back - the write is attempted, and a
+# failure is logged rather than raised.
+_best_effort = functools.partial(guards.best_effort, log)
 
 
 async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,

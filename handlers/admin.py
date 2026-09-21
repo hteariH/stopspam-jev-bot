@@ -6,17 +6,19 @@ stale row in the chats table must never be enough to grant control over a
 group's moderation settings, so the presser's status for the group being
 configured is always looked up fresh, never read from our own database.
 """
+import functools
 import html
 import logging
 import sqlite3
 
 from aiogram import F, Router
-from aiogram.enums import ChatMemberStatus, ChatType
+from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            Message)
 
+from core import guards
 from storage import chats, db
 from texts import t
 
@@ -25,7 +27,6 @@ log = logging.getLogger("stopspam.admin")
 router = Router(name="admin")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
-ADMIN_STATUSES = {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
 THRESHOLD_STEP = 0.05
 _LANGS = ("en", "ru")
 _TOGGLE_FIELDS = {"mode", "jev", "lang"}
@@ -41,26 +42,9 @@ _SQLITE_INT_MIN = -(2**63)
 _SQLITE_INT_MAX = 2**63 - 1
 
 
-def _best_effort(what: str, chat_id: int, fn, *args, **kwargs):
-    """Runs a storage call without letting a DB failure escape the handler.
-
-    Mirrors handlers.review._best_effort: a button press must always get an
-    answer back to the admin's client, even if sqlite is locked or the disk
-    is full.
-    """
-    try:
-        return fn(*args, **kwargs)
-    except sqlite3.Error as exc:
-        log.warning("storage call failed (%s) for chat %s: %s", what, chat_id, exc)
-        return None
-
-
-async def _is_admin(bot, chat_id: int, user_id: int) -> bool:
-    try:
-        member = await bot.get_chat_member(chat_id, user_id)
-    except TelegramAPIError:
-        return False
-    return member.status in ADMIN_STATUSES
+# A button press must always get an answer back to the admin's client, even
+# if sqlite is locked or the disk is full.
+_best_effort = functools.partial(guards.best_effort, log)
 
 
 async def _admin_chats(bot, user_id: int) -> list:
@@ -72,7 +56,7 @@ async def _admin_chats(bot, user_id: int) -> list:
         return []
     result = []
     for row in rows:
-        if await _is_admin(bot, row["chat_id"], user_id):
+        if await guards.is_admin(bot, row["chat_id"], user_id):
             chat = _best_effort("get_chat", row["chat_id"], chats.get_chat, row["chat_id"])
             if chat is not None:
                 result.append(chat)
@@ -205,7 +189,7 @@ async def on_config(query: CallbackQuery) -> None:
     # forwarded or guessed button tell a non-admin whether a given chat id
     # is in the bot's database at all - a privilege boundary should not
     # leak that for free.
-    if not await _is_admin(query.bot, chat_id, query.from_user.id):
+    if not await guards.is_admin(query.bot, chat_id, query.from_user.id):
         await query.answer(t("menu_not_admin"), show_alert=True)
         return
 

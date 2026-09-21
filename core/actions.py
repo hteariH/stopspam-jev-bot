@@ -1,12 +1,13 @@
 """Executes a decision against Telegram. Nothing here decides anything."""
+import functools
 import json
 import logging
-import sqlite3
 import time
 from collections import defaultdict, deque
 
 from aiogram.exceptions import TelegramAPIError
 
+from core import guards
 from core.cards import card_keyboard, render_card
 from core.policy import Action
 from storage import audit, reviews
@@ -14,21 +15,11 @@ from texts import t
 
 log = logging.getLogger("stopspam.actions")
 
-
-def _best_effort(what: str, chat_id: int, fn, *args, **kwargs):
-    """Runs a storage write without letting a DB failure escape apply().
-
-    Mirrors core.pipeline._best_effort: apply()'s contract is that a decision
-    already made must reach Telegram even if sqlite is locked or the disk is
-    full. Unlike pipeline's version, this returns the call's result (None on
-    failure) since reviews.create's return value - the review id - decides
-    whether the card can carry working buttons.
-    """
-    try:
-        return fn(*args, **kwargs)
-    except sqlite3.Error as exc:
-        log.warning("storage write failed (%s) for chat %s: %s", what, chat_id, exc)
-        return None
+# apply()'s contract is that a decision already made must reach Telegram even
+# if sqlite is locked or the disk is full. reviews.create's return value - the
+# review id - decides whether the card can carry working buttons, so here the
+# result matters and not only the attempt.
+_best_effort = functools.partial(guards.best_effort, log)
 
 
 class EnforcementLimiter:
