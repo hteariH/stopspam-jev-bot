@@ -34,17 +34,20 @@ def fresh(monkeypatch):
     # that patches it; re-assert it here so collection order in the same
     # session never lets another module's fake win (see test_group_handler.py).
     Bot.__call__ = fake_call
-    # admin.router, review.router and group.router are module-level aiogram
-    # Routers, and aiogram refuses to attach a Router that already has a
-    # parent Dispatcher. This file calls bot.build_dispatcher() once per
-    # test, so each router module must be reloaded here to hand every test a
-    # fresh, unattached Router - mirrors tests/test_startup.py.
+    # admin.router, review.router, group.router and payments.router are
+    # module-level aiogram Routers, and aiogram refuses to attach a Router
+    # that already has a parent Dispatcher. This file calls
+    # bot.build_dispatcher() once per test, so each router module must be
+    # reloaded here to hand every test a fresh, unattached Router - mirrors
+    # tests/test_startup.py.
     import handlers.admin
     import handlers.group
+    import handlers.payments
     import handlers.review
     importlib.reload(handlers.admin)
     importlib.reload(handlers.review)
     importlib.reload(handlers.group)
+    importlib.reload(handlers.payments)
     yield
     db.reset()
 

@@ -37,8 +37,12 @@ def fresh(monkeypatch):
 def test_dispatcher_includes_every_router():
     import bot
     dispatcher = bot.build_dispatcher()
-    names = {r.name for r in dispatcher.sub_routers}
-    assert {"admin", "review", "group"} <= names
+    names = [r.name for r in dispatcher.sub_routers]
+    assert {"admin", "review", "group", "payments"} <= set(names)
+    # Payments is registered first: nothing else claims a successful_payment
+    # or a pre_checkout_query today, and a dispatcher built without it would
+    # leave every payment unhandled while this suite stayed green.
+    assert names[0] == "payments"
 
 
 def test_group_router_is_last():

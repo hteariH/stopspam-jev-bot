@@ -6,13 +6,20 @@ catch-all message handler, and handlers.group's catch-all filters to group
 chats - so a successful_payment message currently falls through unhandled.
 Registering first states that dependency instead of relying on it staying
 true.
+
+The successful_payment handler deliberately accepts a payment from any chat
+type - the Bot API documentation does not say whether such a message can
+ever arrive outside a private chat, and money is involved. The cost of
+missing one is an unrecorded charge with no handle on it; the cost of
+accepting one from an unexpected chat is nothing. @router.message(F.successful_payment)
+is specific enough on its own, and it is the only message handler in this
+module, so there is nothing else for a chat-type filter to protect.
 """
 import functools
 import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
-from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message, PreCheckoutQuery
 
@@ -24,7 +31,6 @@ from texts import t
 log = logging.getLogger("stopspam.payments")
 
 router = Router(name="payments")
-router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 # A digit-only chat id outside this range parses fine with int() but makes
 # sqlite3 raise OverflowError on binding - which is not a sqlite3.Error, so it
@@ -108,12 +114,24 @@ async def on_successful_payment(message: Message) -> None:
         return
     chat_id, stars = parsed
 
+    expiry = None
     if payment.subscription_expiration_date:
-        expiry = datetime.fromtimestamp(payment.subscription_expiration_date,
-                                        timezone.utc)
-    else:
-        # The field is optional in the Bot API. A missing one must not leave a
-        # paying customer with nothing.
+        try:
+            expiry = datetime.fromtimestamp(payment.subscription_expiration_date,
+                                            timezone.utc)
+        except (ValueError, OverflowError, OSError) as exc:
+            # An out-of-range timestamp must not raise here: that would escape
+            # before record_payment ever runs, leaving money moved with no
+            # ledger row and no log line carrying the charge id to find it by.
+            log.warning(
+                "chat %s payment %s has an unusable subscription_expiration_date "
+                "%r (%s); falling back to a fresh %s-second subscription",
+                chat_id, payment.telegram_payment_charge_id,
+                payment.subscription_expiration_date, exc, config.SUBSCRIPTION_PERIOD)
+    if expiry is None:
+        # Either the field is absent - it is optional in the Bot API - or it
+        # was unusable. A missing or bad one must not leave a paying customer
+        # with nothing.
         expiry = datetime.now(timezone.utc) + timedelta(
             seconds=config.SUBSCRIPTION_PERIOD)
     expires_at = expiry.isoformat(timespec="seconds")

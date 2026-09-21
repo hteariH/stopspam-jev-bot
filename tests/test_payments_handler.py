@@ -147,6 +147,83 @@ async def test_a_payment_with_no_expiry_still_grants_thirty_days():
     assert (paid - datetime.now(timezone.utc)).days >= 29
 
 
+async def test_a_payment_with_an_out_of_range_expiry_still_records_and_grants_thirty_days():
+    """datetime.fromtimestamp raises OverflowError/ValueError/OSError on a bad
+    timestamp. That must not escape before record_payment runs and before an
+    ERROR log carries the charge id - the exact "money moved, no record, no
+    handle on it" outcome the design forbids."""
+    from datetime import datetime, timezone
+    from handlers import payments
+    from storage import billing, chats
+    chats.ensure_chat(-100123, "Group")
+    await payments.on_successful_payment(
+        FakeMessage(charge_id="ch_1", payload="sub:-100123:50",
+                    user_id=7, expiration=99999999999999999999))
+    assert billing.get(-100123).stars == 50
+    paid = datetime.fromisoformat(billing.get(-100123).paid_until)
+    assert (paid - datetime.now(timezone.utc)).days >= 29
+
+
+async def test_a_successful_payment_from_a_group_chat_is_still_recorded():
+    """The router used to filter to private chats only. Whether Telegram can
+    ever deliver a successful_payment outside a private chat is undocumented,
+    so the filter was removed rather than guessed at: a payment must be
+    recorded in full wherever it lands, since the money has already moved by
+    the time this handler runs."""
+    import importlib
+    from datetime import datetime, timezone
+
+    from aiogram import Bot, Dispatcher
+    from aiogram.methods import SendMessage
+    from aiogram.types import Chat, Message, SuccessfulPayment, Update, User
+
+    import handlers.payments
+    from storage import billing, chats
+
+    # payments.router is a module-level aiogram Router, and aiogram refuses
+    # to attach a Router that already has a parent Dispatcher. Other test
+    # modules (tests/test_flow.py, tests/test_startup.py) also build a
+    # Dispatcher from bot.build_dispatcher() in the same process, so this
+    # test reloads the module itself rather than relying on run order to
+    # hand it an unattached Router.
+    importlib.reload(handlers.payments)
+    payments = handlers.payments
+
+    chats.ensure_chat(-100123, "Group")
+
+    async def fake_call(self, method, request_timeout=None):
+        if isinstance(method, SendMessage):
+            return Message(message_id=2, date=datetime.now(timezone.utc),
+                           chat=Chat(id=method.chat_id, type="supergroup"),
+                           text=method.text)
+        return True
+
+    # Bot.__call__ is a class attribute shared by every test module that
+    # patches it; other modules reassign it in their own fixtures, so a bare
+    # reassignment here (mirroring tests/test_admin_handler.py) is safe.
+    Bot.__call__ = fake_call
+
+    dispatcher = Dispatcher()
+    dispatcher.include_router(payments.router)
+    bot = Bot("123:abc")
+
+    message = Message(
+        message_id=1, date=datetime.now(timezone.utc),
+        chat=Chat(id=-100999, type="supergroup"),
+        from_user=User(id=7, is_bot=False, first_name="Payer"),
+        successful_payment=SuccessfulPayment(
+            currency="XTR", total_amount=50, invoice_payload="sub:-100123:50",
+            telegram_payment_charge_id="ch_grp",
+            provider_payment_charge_id="prov_1",
+            subscription_expiration_date=1790000000, is_recurring=True,
+        ),
+    )
+    await dispatcher.feed_update(bot, Update(update_id=1, message=message))
+
+    assert billing.get(-100123).paid_until is not None
+    assert billing.get(-100123).stars == 50
+
+
 async def test_pre_checkout_accepts_a_valid_invoice():
     from handlers import payments
     query = FakePreCheckout(payload="sub:-100123:50", currency="XTR", amount=50)
