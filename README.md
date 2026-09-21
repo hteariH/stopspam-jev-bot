@@ -95,9 +95,20 @@ Message text leaving the group and crossing to a US-based API is the plain
 cost of getting a message classified; there is no way around it while
 TypeSafe does the classification.
 
-Only messages from users without an established history in the group are
-sent, plus messages containing links, forwards, or media captions — see
-"What it does, and what it does not" above for exactly when that applies.
+Exactly these messages are sent, and no others:
+
+- every message from a member who has not yet posted 5 clean messages in
+  that group (the number is per-chat and an admin can change it);
+- every message from a member who has been flagged in that group before —
+  that does not stop;
+- any message containing a link, a Telegram invite link, a forward, or a
+  caption on media, from anyone, however long they have been in the group;
+- the next message from a trusted member who has been silent for more than
+  30 days.
+
+Messages from the group's admins and owners are never sent, nor are messages
+from anyone an admin has marked as not spam, nor messages with neither text
+nor a caption (joins, pins, photos with no caption).
 
 Message text is stored in the review queue for at most 7 days and then
 erased automatically (`bot.py` runs an hourly housekeeping pass that clears

@@ -313,3 +313,31 @@ async def test_the_menu_names_the_admin_whose_dm_receives_the_cards():
     await feed(dm("/chats"))
     body = sent()[-1].text
     assert f"admin {ADMIN}" in body
+
+
+async def test_privacy_admits_the_two_cases_it_used_to_omit():
+    """The old text promised only "users without established history, plus
+    links, forwards and media captions". The gate also sends every message
+    from a flagged user forever (core/gate.py, status == "flagged") and
+    re-checks a trusted member returning after 30 days of silence
+    (days_since_seen > RECHECK_AFTER_DAYS). This is a public promise and
+    README.md commits in writing that the two must agree.
+
+    Production edit this catches: restoring the old two-line summary, which
+    mentions neither case.
+    """
+    await feed(dm("/privacy"))
+    body = sent()[-1].text.lower()
+    assert "flagged" in body and "does not stop" in body
+    assert "30 days" in body
+    assert "5 clean messages" in body
+
+
+async def test_privacy_names_what_is_never_sent():
+    """The other half of an honest description: admins, allowlisted users and
+    messages with no text at all never leave the group."""
+    await feed(dm("/privacy"))
+    body = sent()[-1].text.lower()
+    assert "never send" in body
+    assert "admins and owners" in body
+    assert "neither text nor a caption" in body
