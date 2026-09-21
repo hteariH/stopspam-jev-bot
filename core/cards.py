@@ -13,15 +13,15 @@ MAX_TITLE = 128
 MAX_NAME = 128
 
 
+def _trim(value: str, limit: int) -> str:
+    return value if len(value) <= limit else value[:limit] + "…"
+
+
 def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
                 author_id: int, text: str | None, chat_title: str, lang: str) -> str:
-    if len(chat_title) > MAX_TITLE:
-        chat_title = chat_title[:MAX_TITLE] + "…"
-    if len(author_name) > MAX_NAME:
-        author_name = author_name[:MAX_NAME] + "…"
-    quote = (text or "")[:MAX_QUOTE]
-    if text and len(text) > MAX_QUOTE:
-        quote += "…"
+    chat_title = _trim(chat_title, MAX_TITLE)
+    author_name = _trim(author_name, MAX_NAME)
+    quote = _trim(text or "", MAX_QUOTE)
     return "\n".join([
         f"<b>{html.escape(t('card_title', lang))}</b>",
         f"{html.escape(t('card_chat', lang))}: {html.escape(chat_title)}",
@@ -36,6 +36,30 @@ def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
         f"severity {verdict.severity} (confidence {verdict.severity_confidence:.2f})</code>",
         "",
         f"<blockquote>{html.escape(quote)}</blockquote>",
+    ])
+
+
+def render_outage_notice(*, author_name: str, author_id: int, text: str | None,
+                         chat_title: str, lang: str) -> str:
+    """The notice for a trigger-bearing message the classifier never saw.
+
+    The spec's failure handling says a message left alone during an outage
+    "becomes a review card" if it carried triggers. This is deliberately not
+    a card: there is no verdict to show a breakdown of and no decision to
+    reverse, so buttons would be buttons that do nothing. What an admin needs
+    is to know it happened and to be able to find the message, which is the
+    author, the chat and enough of the text to recognise it.
+    """
+    return "\n".join([
+        f"<b>{html.escape(t('outage_title', lang))}</b>",
+        f"{html.escape(t('card_chat', lang))}: "
+        f"{html.escape(_trim(chat_title, MAX_TITLE))}",
+        f"{html.escape(t('card_author', lang))}: "
+        f"{html.escape(_trim(author_name, MAX_NAME))} (<code>{author_id}</code>)",
+        "",
+        html.escape(t("outage_body", lang)),
+        "",
+        f"<blockquote>{html.escape(_trim(text or '', MAX_QUOTE))}</blockquote>",
     ])
 
 

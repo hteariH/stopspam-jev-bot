@@ -5,8 +5,9 @@ import logging
 
 from aiogram.exceptions import TelegramAPIError
 
-from core import guards
-from core.cards import card_keyboard, render_card
+from core import guards, pipeline
+from core.cards import (card_keyboard, render_card,
+                        render_outage_notice)
 from core.policy import Action
 from core.ratelimit import RateLimiter
 from storage import audit, reviews
@@ -44,9 +45,43 @@ def card_destination(chat) -> int | None:
     return chat.log_chat_id
 
 
+async def _report_outage(bot, *, message, chat) -> str:
+    """Tells the destination chat about a message the classifier never saw.
+
+    The spec's failure handling is explicit: during an outage a message that
+    carried triggers "becomes a review card". Without this, every link,
+    invite and forward from an unknown account passed unseen while the audit
+    log recorded a reason implying a human had been involved.
+
+    The pipeline has already audited the failure, so this only has to reach a
+    person. It sends no buttons: there is no verdict behind it and no
+    decision to reverse.
+    """
+    target = card_destination(chat)
+    if target is None:
+        log.warning("chat %s has no review destination: outage notice for message "
+                    "%s skipped", chat.chat_id, message.message_id)
+        return "ignored"
+    body = render_outage_notice(
+        author_name=message.from_user.full_name, author_id=message.from_user.id,
+        text=message.text or message.caption,
+        chat_title=chat.title or str(chat.chat_id), lang=chat.lang,
+    )
+    try:
+        await bot.send_message(target, body)
+    except TelegramAPIError as exc:
+        log.warning("could not post outage notice to %s: %s", target, exc)
+        return "ignored"
+    return "outage_reported"
+
+
 async def apply(bot, *, message, outcome, chat, limiter: RateLimiter) -> str:
     decision, verdict = outcome.decision, outcome.verdict
-    if decision is None or decision.action == Action.IGNORE:
+    if decision is None:
+        if outcome.skipped == pipeline.UNAVAILABLE_WITH_TRIGGER:
+            return await _report_outage(bot, message=message, chat=chat)
+        return "ignored"
+    if decision.action == Action.IGNORE:
         return "ignored"
 
     if not limiter.allow(chat.chat_id):

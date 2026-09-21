@@ -99,12 +99,32 @@ async def test_outage_never_deletes():
     assert outcome.skipped == "jev_unavailable"
 
 
-async def test_outage_with_trigger_still_reaches_a_human():
+async def test_outage_with_a_trigger_is_marked_for_a_human():
+    """The pipeline's half of the spec's "if it carried triggers it becomes a
+    review card": it cannot send anything itself, so what it owes the caller
+    is a skip reason distinct from the silent one, and an audit row saying
+    the message went unchecked.
+
+    core.actions is what turns this reason into a notice; that half is tested
+    in tests/test_group_handler.py. Asserting only the string here was the
+    original weakness - it passed while nothing downstream acted on it.
+
+    Production edit this catches: collapsing the two branches of `reason` in
+    evaluate() to one value, which makes a trigger-bearing message during an
+    outage indistinguishable from a plain one.
+    """
+    from core import pipeline
+    from storage import audit
     outcome = await run(
         FakeJevClient({}, fail=True),
         message_facts=facts(link_count=1, link_domains=("evil.example",)),
     )
-    assert outcome.skipped == "jev_unavailable_flagged"
+    assert outcome.skipped == pipeline.UNAVAILABLE_WITH_TRIGGER
+    assert outcome.skipped != pipeline.UNAVAILABLE
+    assert outcome.decision is None, "an outage never produces an action"
+    row = audit.recent(-100)[0]
+    assert row["action"] == "failed"
+    assert row["reason"] == pipeline.UNAVAILABLE_WITH_TRIGGER
 
 
 async def test_outage_is_audited():

@@ -14,6 +14,12 @@ from storage.trust import TrustRow
 
 log = logging.getLogger("stopspam.pipeline")
 
+# The skip reason core.actions turns into an outage notice. A message the
+# classifier never saw that carried a link, an invite, a forward or a media
+# caption is the one case the spec does not let pass in silence.
+UNAVAILABLE_WITH_TRIGGER = "jev_unavailable_flagged"
+UNAVAILABLE = "jev_unavailable"
+
 
 @dataclass(frozen=True)
 class Outcome:
@@ -52,7 +58,7 @@ async def evaluate(client: JevClient, *, chat: ChatConfig, facts: MessageFacts,
         verdict = await client.classify(state.build_state(facts))
     except JevError as exc:
         log.warning("jev unavailable for chat %s: %s", chat.chat_id, exc)
-        reason = "jev_unavailable_flagged" if gate.has_trigger(facts) else "jev_unavailable"
+        reason = UNAVAILABLE_WITH_TRIGGER if gate.has_trigger(facts) else UNAVAILABLE
         _best_effort("audit", chat.chat_id, audit.record,
                      chat.chat_id, trust_row.user_id, None, None, "failed", reason)
         return Outcome(None, None, facts, reason)

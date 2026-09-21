@@ -8,6 +8,15 @@ STRINGS: dict[str, dict[str, str]] = {
     "card_kind": {"en": "Kind", "ru": "Тип"},
     "card_breakdown": {"en": "Breakdown", "ru": "Разбор"},
     "card_deleted": {"en": "Deleted automatically", "ru": "Удалено автоматически"},
+    "outage_title": {"en": "Not checked", "ru": "Сообщение не проверено"},
+    "outage_body": {
+        "en": "The classifier was unavailable, so this message was never checked. "
+              "It carried a link, a forward or a media caption, which is why you "
+              "are being told about it. Nothing was deleted — please take a look.",
+        "ru": "Классификатор был недоступен, поэтому это сообщение не проверялось. "
+              "В нём есть ссылка, пересылка или подпись к медиа — поэтому я о нём "
+              "сообщаю. Ничего не удалено, посмотрите, пожалуйста, сами.",
+    },
     "btn_ban": {"en": "Delete & ban", "ru": "Удалить и забанить"},
     "btn_delete": {"en": "Delete", "ru": "Удалить"},
     "btn_not_spam": {"en": "Not spam", "ru": "Не спам"},

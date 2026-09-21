@@ -153,7 +153,12 @@ async def test_admin_message_is_never_checked():
     assert client.calls == []
 
 
-async def test_outage_deletes_nothing():
+async def test_outage_on_a_plain_message_says_nothing():
+    """A message with no link, forward or media caption is left alone in
+    silence during an outage - the spec only promises a review for
+    trigger-bearing ones, and notifying on every unchecked message would bury
+    the ones that matter.
+    """
     from storage import db
     await feed(group_message("buy crypto now"), FakeJevClient({}, fail=True))
     assert deletions() == []
@@ -406,3 +411,39 @@ async def test_setlog_does_not_reach_the_classifier():
     group.set_client(client)
     await dispatch(command("/setlog", MODCHAT, ADMIN))
     assert client.calls == []
+
+
+async def test_outage_on_a_trigger_bearing_message_reaches_a_human():
+    """The spec's failure handling: during an outage a message that carried
+    triggers still reaches a human. Before this, the pipeline computed a
+    distinct reason for it, audited it, and core.actions threw the outcome
+    away as "ignored" - so every link, invite and forward from an unknown
+    account passed unseen.
+
+    Production edit this catches: removing the UNAVAILABLE_WITH_TRIGGER
+    branch at the top of core.actions.apply, which restores the old silent
+    "ignored" return.
+    """
+    await feed(group_message("look at https://evil.example/free"),
+               FakeJevClient({}, fail=True))
+    notices = cards_to(LOG)
+    assert notices, "a trigger-bearing message left unchecked is reported"
+    assert deletions() == [], "an outage never deletes"
+    assert notices[-1].reply_markup is None, (
+        "no verdict behind it and nothing to reverse, so no buttons")
+    body = notices[-1].text
+    assert "Not checked" in body
+    assert "evil.example" in body, "an admin must be able to find the message"
+    assert str(SPAMMER) in body
+
+
+async def test_an_outage_notice_is_never_posted_into_the_moderated_group():
+    """The outage notice quotes the message too, so it obeys the same rule
+    the review card does.
+
+    Production edit this catches: using `chat.log_chat_id or chat.chat_id`
+    inside _report_outage instead of actions.card_destination.
+    """
+    await feed(group_message("look at https://evil.example/free"),
+               FakeJevClient({}, fail=True), log_chat=None)
+    assert cards_to(GROUP) == []
