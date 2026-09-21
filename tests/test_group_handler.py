@@ -447,3 +447,56 @@ async def test_an_outage_notice_is_never_posted_into_the_moderated_group():
     await feed(group_message("look at https://evil.example/free"),
                FakeJevClient({}, fail=True), log_chat=None)
     assert cards_to(GROUP) == []
+
+
+def service_message(**extra) -> Update:
+    """A message with no text and no caption: a join, a pin, a bare photo."""
+    return Update(update_id=55, message=Message(
+        message_id=55, date=NOW,
+        chat=Chat(id=GROUP, type="supergroup", title="Python Chat"),
+        from_user=User(id=SPAMMER, is_bot=False, first_name="Ann"),
+        **extra,
+    ))
+
+
+async def test_a_join_costs_no_classifier_call():
+    """@router.message() matches joins, leaves, pins and title changes, and
+    the gate returns low_history for anyone new - so the bot used to spend a
+    Jev call asking whether nothing is spam, plus two get_chat_member calls,
+    on every one of them. In a group with normal join churn that is most of
+    the spend.
+
+    Production edit this catches: removing the `if not (message.text or
+    message.caption): return` guard in on_group_message.
+    """
+    client = FakeJevClient({}, default=CHATTER)
+    await feed(service_message(
+        new_chat_members=[User(id=SPAMMER, is_bot=False, first_name="Ann")]), client)
+    assert client.calls == [], "there is nothing in a join to classify"
+    assert [c for c in calls if isinstance(c, GetChatMember)] == []
+
+
+async def test_a_captionless_photo_costs_no_classifier_call():
+    client = FakeJevClient({}, default=CHATTER)
+    await feed(service_message(photo=[]), client)
+    assert client.calls == []
+
+
+async def test_a_captioned_photo_is_still_checked():
+    """The paired positive case: media is judged by its caption, per the
+    spec, so the guard must key on text-or-caption and not on media at all.
+    """
+    from storage import chats
+    chats.ensure_chat(GROUP, "Python Chat")
+    chats.update_chat(GROUP, log_chat_id=LOG, mode="active",
+                      observe_until="2020-01-01T00:00:00+00:00")
+    client = FakeJevClient({"buy crypto": SCAM})
+    from handlers import group
+    group.set_client(client)
+    await dispatch(Update(update_id=56, message=Message(
+        message_id=56, date=NOW,
+        chat=Chat(id=GROUP, type="supergroup", title="Python Chat"),
+        from_user=User(id=SPAMMER, is_bot=False, first_name="Ann"),
+        caption="buy crypto now", photo=[])))
+    assert client.calls, "a caption is the message, and must still be checked"
+    assert len(deletions()) == 1

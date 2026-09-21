@@ -142,6 +142,17 @@ async def on_group_message(message: Message) -> None:
     if _client is None or message.from_user is None or message.from_user.is_bot:
         return
 
+    # Joins, leaves, pins, title changes and captionless media all arrive
+    # here: the router's only message filter is on the chat type. There is
+    # nothing to classify in any of them - facts.text would be empty, the
+    # gate would return low_history for anyone new, and the bot would spend
+    # a Jev call asking whether nothing is spam, plus two get_chat_member
+    # calls. In a group with normal join churn that is most of the spend,
+    # and a high enough verdict on nothing would post a review card about
+    # somebody joining.
+    if not (message.text or message.caption):
+        return
+
     try:
         chat = chats.ensure_chat(message.chat.id, message.chat.title or "")
         row = trust.seen(message.chat.id, message.from_user.id)
