@@ -122,8 +122,19 @@ async def test_admin_message_is_never_checked():
 
 
 async def test_outage_deletes_nothing():
+    from storage import db
     await feed(group_message("buy crypto now"), FakeJevClient({}, fail=True))
     assert deletions() == []
+    assert cards_to(LOG) == []
+    # An empty deletions() list alone can't tell a handled outage from a crash
+    # before the delete was ever attempted. The pipeline's own outage path
+    # audits the failure before returning, so its presence is proof the
+    # handler ran the message all the way through rather than raising early.
+    rows = db.connect().execute(
+        "SELECT * FROM audit WHERE chat_id = ?", (GROUP,)).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["action"] == "failed"
+    assert rows[0]["reason"] == "jev_unavailable"
 
 
 async def test_review_row_is_created_for_the_card():

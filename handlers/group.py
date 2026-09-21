@@ -1,5 +1,6 @@
 """Every group message passes through here."""
 import logging
+import sqlite3
 
 from aiogram import F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -51,8 +52,13 @@ async def on_group_message(message: Message) -> None:
     if _client is None or message.from_user is None or message.from_user.is_bot:
         return
 
-    chat = chats.ensure_chat(message.chat.id, message.chat.title or "")
-    row = trust.seen(message.chat.id, message.from_user.id)
+    try:
+        chat = chats.ensure_chat(message.chat.id, message.chat.title or "")
+        row = trust.seen(message.chat.id, message.from_user.id)
+    except sqlite3.Error as exc:
+        log.warning("storage unavailable for chat %s, skipping message: %s",
+                    message.chat.id, exc)
+        return
 
     facts = state.facts_from_message(
         message,

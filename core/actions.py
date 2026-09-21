@@ -1,6 +1,7 @@
 """Executes a decision against Telegram. Nothing here decides anything."""
 import json
 import logging
+import sqlite3
 import time
 from collections import defaultdict, deque
 
@@ -9,8 +10,25 @@ from aiogram.exceptions import TelegramAPIError
 from core.cards import card_keyboard, render_card
 from core.policy import Action
 from storage import audit, reviews
+from texts import t
 
 log = logging.getLogger("stopspam.actions")
+
+
+def _best_effort(what: str, chat_id: int, fn, *args, **kwargs):
+    """Runs a storage write without letting a DB failure escape apply().
+
+    Mirrors core.pipeline._best_effort: apply()'s contract is that a decision
+    already made must reach Telegram even if sqlite is locked or the disk is
+    full. Unlike pipeline's version, this returns the call's result (None on
+    failure) since reviews.create's return value - the review id - decides
+    whether the card can carry working buttons.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except sqlite3.Error as exc:
+        log.warning("storage write failed (%s) for chat %s: %s", what, chat_id, exc)
+        return None
 
 
 class EnforcementLimiter:
@@ -39,15 +57,18 @@ async def apply(bot, *, message, outcome, chat, limiter: EnforcementLimiter) -> 
 
     if not limiter.allow(chat.chat_id):
         log.warning("enforcement rate limit hit in chat %s", chat.chat_id)
-        audit.record(chat.chat_id, message.from_user.id, message.message_id,
-                     decision.risk, "rate_limited", decision.reason)
+        _best_effort("audit_rate_limited", chat.chat_id, audit.record,
+                     chat.chat_id, message.from_user.id, message.message_id,
+                     decision.risk, "rate_limited", decision.reason, model=verdict.model)
         return "rate_limited"
 
     text = message.text or message.caption
-    review_id = reviews.create(
-        chat.chat_id, message.message_id, message.from_user.id, text,
-        json.dumps(verdict.as_dict()), decision.risk,
-    )
+    # A missing review row must not cancel an already-decided action: a
+    # confident deletion still happens, and the card still reaches admins.
+    # It just can't carry buttons bound to a row that doesn't exist.
+    review_id = _best_effort("create_review", chat.chat_id, reviews.create,
+                             chat.chat_id, message.message_id, message.from_user.id,
+                             text, json.dumps(verdict.as_dict()), decision.risk)
 
     deleted = False
     if decision.action == Action.DELETE:
@@ -64,15 +85,15 @@ async def apply(bot, *, message, outcome, chat, limiter: EnforcementLimiter) -> 
         text=text, chat_title=chat.title or str(chat.chat_id), lang=chat.lang,
     )
     if deleted:
-        from texts import t
         body += f"\n\n<i>{t('card_deleted', chat.lang)}</i>"
+    keyboard = card_keyboard(review_id, chat.lang) if review_id is not None else None
     try:
-        await bot.send_message(target, body,
-                               reply_markup=card_keyboard(review_id, chat.lang))
+        await bot.send_message(target, body, reply_markup=keyboard)
     except TelegramAPIError as exc:
         log.warning("could not post card to %s: %s", target, exc)
 
     action = "deleted" if deleted else "reviewed"
-    audit.record(chat.chat_id, message.from_user.id, message.message_id,
+    _best_effort("audit_enforcement", chat.chat_id, audit.record,
+                 chat.chat_id, message.from_user.id, message.message_id,
                  decision.risk, action, decision.reason, model=verdict.model)
     return action
