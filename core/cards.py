@@ -8,15 +8,17 @@ from core.policy import Decision
 from core.verdict import Verdict
 from texts import t
 
-MAX_QUOTE = 700
-MAX_TITLE = 64
-MAX_NAME = 64
+MAX_QUOTE = 500
+MAX_TITLE = 128
+MAX_NAME = 128
 
 
 def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
                 author_id: int, text: str | None, chat_title: str, lang: str) -> str:
-    chat_title = chat_title[:MAX_TITLE]
-    author_name = author_name[:MAX_NAME]
+    if len(chat_title) > MAX_TITLE:
+        chat_title = chat_title[:MAX_TITLE] + "…"
+    if len(author_name) > MAX_NAME:
+        author_name = author_name[:MAX_NAME] + "…"
     quote = (text or "")[:MAX_QUOTE]
     if text and len(text) > MAX_QUOTE:
         quote += "…"

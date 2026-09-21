@@ -59,18 +59,25 @@ def test_card_in_russian():
     assert "Тип" in body
     assert "Разбор" in body
 
+    # Also test keyboard buttons in Russian
+    markup = card_keyboard(42, "ru")
+    button_texts = [b.text for row in markup.inline_keyboard for b in row]
+    assert "Удалить и забанить" in button_texts
+    assert "Удалить" in button_texts
+    assert "Не спам" in button_texts
+
 
 def test_card_worst_case_length():
     """All fields at max length with < characters (escape quadruples them).
-    With MAX_TITLE=64, MAX_NAME=64, MAX_QUOTE=700, worst case should stay
+    With MAX_TITLE=128, MAX_NAME=128, MAX_QUOTE=500, worst case should stay
     comfortably under 4096 (Telegram limit) with real headroom."""
     body = render_card(
         decision=Decision(Action.REVIEW, 0.99, "no_delete_permission"),
         verdict=SCAM,
-        author_name="<" * 64,
+        author_name="<" * 128,
         author_id=9999999999,
-        text="<" * 700,
-        chat_title="<" * 64,
+        text="<" * 500,
+        chat_title="<" * 128,
         lang="en",
     )
     assert len(body) < 4096, f"Card length {len(body)} exceeds Telegram limit"
