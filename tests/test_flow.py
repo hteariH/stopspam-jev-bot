@@ -217,10 +217,14 @@ async def test_an_unpaid_large_group_reports_spam_without_deleting_it():
 
 
 async def test_a_large_group_inside_its_trial_still_deletes():
+    from storage import billing
     _active_group(5000)
     telegram, dispatcher = _dispatch()
     await dispatcher.feed_update(telegram, group_message("buy crypto now", SPAMMER, 1))
     assert len(deletions()) == 1
+    assert billing.get(GROUP).grace_until is not None, \
+        "a grace window is only opened for a paid tier, so this proves the " \
+        "member count was really read as LARGE and not misread as free"
 
 
 async def test_a_small_group_deletes_without_ever_paying():
@@ -252,4 +256,4 @@ async def test_an_admins_message_is_untouched_whatever_the_tier():
     before = len(group._client.calls)
     await dispatcher.feed_update(telegram, group_message("buy crypto now", ADMIN, 1))
     assert deletions() == []
-    assert len(group._client.calls) == before, "an admin must never reach the API"
+    assert len(group._client.calls) == before, "an admin must never reach the classifier"
