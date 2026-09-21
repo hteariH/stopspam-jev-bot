@@ -211,11 +211,18 @@ async def on_chats(message: Message) -> None:
         await _send_menu(message.bot, message, chat, row, body, keyboard)
 
 
-async def _send_menu(bot, message, chat, row, body, keyboard) -> None:
-    """Sends one chat's menu, with a subscribe button when one applies.
+async def _with_offer(bot, chat, row, body, keyboard) -> str:
+    """Appends the subscribe button to a rendered menu, or says why it cannot.
 
-    One malformed or oversized menu must not take down /chats for every other
-    chat this admin administers.
+    Both render paths go through here. _menu stays synchronous and pure - it
+    is the part that needs no Telegram call - and this is the part that does,
+    so the two callers share one answer to "is this chat being offered a
+    subscription right now?". When only /chats had it, any button press
+    handed the admin back a menu with no way to pay, at the exact moment
+    enforcement became payment-gated.
+
+    Returns the body, which may have gained a line; the keyboard is appended
+    to in place.
     """
     ent = tiers.build(tiers.tier_for(row.member_count), paid_until=row.paid_until,
                       grace_until=row.grace_until, now=datetime.now(timezone.utc))
@@ -229,6 +236,16 @@ async def _send_menu(bot, message, chat, row, body, keyboard) -> None:
                                      url=url)])
         else:
             body += f"\n\n<i>{html.escape(t('invoice_unavailable', chat.lang))}</i>"
+    return body
+
+
+async def _send_menu(bot, message, chat, row, body, keyboard) -> None:
+    """Sends one chat's menu, with a subscribe button when one applies.
+
+    One malformed or oversized menu must not take down /chats for every other
+    chat this admin administers.
+    """
+    body = await _with_offer(bot, chat, row, body, keyboard)
     try:
         await message.answer(body, reply_markup=keyboard)
     except TelegramAPIError as exc:
@@ -337,6 +354,7 @@ async def on_config(query: CallbackQuery) -> None:
     row = _best_effort("billing_get", chat_id, billing.get, chat_id) \
         or billing.empty(chat_id)
     body, keyboard = _menu(chat, row)
+    body = await _with_offer(query.bot, chat, row, body, keyboard)
     try:
         await query.message.edit_text(body, reply_markup=keyboard)
     except TelegramAPIError as exc:

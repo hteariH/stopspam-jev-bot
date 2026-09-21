@@ -4,6 +4,7 @@ The bot going quiet is the failure this exists to prevent: a group that grows
 past the free limit and silently stops being enforced is the bot failing at
 its job exactly when the group became worth attacking.
 """
+import html
 import logging
 from datetime import datetime, timezone
 
@@ -33,14 +34,26 @@ _TEXT = {
 
 
 def next_stage(entitlement, *, grace_until: str | None,
-               notified_stage: str | None, now: datetime) -> str | None:
+               notified_stage: str | None, observing: bool,
+               now: datetime) -> str | None:
     """Which notice this chat is due, or None.
 
     Pure, so every transition can be tested without a bot. The stage flag is
     what bounds how often anything is sent - stronger than a timer, because a
-    stage that has been announced is never announced again at all.
+    stage that has been announced is never announced again at all. Which is
+    also why a wrong stage here is expensive: stages only move forward, so
+    whichever one lands first blocks every correct one after it.
+
+    ``observing`` silences everything, mirroring the precedence core.policy
+    already applies - a chat inside its 7-day observation window is deleting
+    nothing regardless, has not been offered anything yet, and must not be
+    told its subscription has ended. Without it a brand-new large group reads
+    as "not_entitled" on its very first message and is announced as lapsed
+    before it has ever been sold anything.
     """
     if entitlement.tier == tiers.FREE:
+        return None
+    if observing:
         return None
 
     candidate = None
@@ -60,16 +73,23 @@ def next_stage(entitlement, *, grace_until: str | None,
     return candidate if _ORDER.index(candidate) > _ORDER.index(notified_stage) else None
 
 
-async def maybe_notify(bot, *, chat, row, entitlement) -> None:
+async def maybe_notify(bot, *, chat, row, entitlement, observing: bool) -> None:
     """Sends the due notice, if any, and records that it went out.
 
     The stage is recorded only after Telegram accepted the message. Recording
     it first would burn the one announcement a chat gets on a send that never
     arrived, and the admin would never be told at all.
+
+    ``row`` must carry the grace window that is actually in force, including
+    one opened on this very message - a row read before start_grace has
+    grace_until=None, which computes zero days left and announces a trial that
+    "ends in 0 days" on the day it started. ``observing`` is the caller's
+    chats.is_observing(chat); core stays free of storage.chats this way.
     """
     now = datetime.now(timezone.utc)
     stage = next_stage(entitlement, grace_until=row.grace_until,
-                       notified_stage=row.notified_stage, now=now)
+                       notified_stage=row.notified_stage,
+                       observing=observing, now=now)
     if stage is None:
         return
 
@@ -81,7 +101,13 @@ async def maybe_notify(bot, *, chat, row, entitlement) -> None:
 
     days = tiers.days_left(
         row.grace_until if stage != STAGE_LAPSED else row.paid_until, now=now)
-    body = t(_TEXT[stage], chat.lang, title=chat.title or str(chat.chat_id),
+    # chat.title is the group's own, chosen by whoever named it, and this goes
+    # out under the bot's default ParseMode.HTML. A title containing "&", "<"
+    # or ">" makes Telegram reject the whole send - and since a failed send
+    # records no stage, that rejection would repeat on every evaluation.
+    # Escaped exactly as core.cards and handlers.admin do it.
+    body = t(_TEXT[stage], chat.lang,
+             title=html.escape(chat.title) if chat.title else str(chat.chat_id),
              limit=config.FREE_MEMBER_LIMIT, days=days)
 
     keyboard = None

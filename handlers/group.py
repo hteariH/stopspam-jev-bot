@@ -1,6 +1,7 @@
 """Every group message passes through here."""
 import logging
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from aiogram import F, Router
@@ -109,6 +110,21 @@ async def _entitlement(bot, chat) -> tuple[tiers.Entitlement, billing.BillingRow
     if tier != tiers.FREE and grace_until is None and not chats.is_observing(chat):
         grace_until = guards.best_effort(log, "start_grace", chat.chat_id,
                                          billing.start_grace, chat.chat_id)
+        if grace_until is None:
+            # Storage failed on the write this time rather than the read, and
+            # the ruling is unconditional: a billing problem must never disarm
+            # moderation. Falling through would leave grace_until None, which
+            # builds not_entitled and stops this chat being enforced over a
+            # locked database. The tier is kept because it was read
+            # successfully and the pipeline log line reports it.
+            return tiers.Entitlement(tier=tier, active=True,
+                                     reason="billing_unavailable",
+                                     price=tiers.price_for(tier)), row
+        # The caller hands this row to core.notices, which needs the window
+        # that is now in force. The row was read before start_grace, so its
+        # grace_until is still None - and a notice computed from it would tell
+        # the admin the trial "ends in 0 days" on the day it opened.
+        row = replace(row, grace_until=grace_until)
 
     return tiers.build(tier, paid_until=row.paid_until,
                        grace_until=grace_until, now=now), row
@@ -237,9 +253,20 @@ async def on_group_message(message: Message) -> None:
     is_admin = check is guards.AdminCheck.ADMIN
     can_delete = await _can_delete(message.bot, message.chat.id)
     entitlement, billing_row = await _entitlement(message.bot, chat)
-    if billing_row is not None:
+    # Notices ride the once-per-24-hours member-count refresh, as the design
+    # says, rather than running on every message. The happy path is bounded by
+    # the stage flag, but core.notices deliberately records no stage when the
+    # send fails - so for a chat whose destination is a user who never pressed
+    # Start, every later message would cost a create_invoice_link plus a
+    # failing send_message, forever. The row here is the one read before the
+    # refresh, so its timestamp still says whether this message was the due
+    # one. (During a Telegram outage the count stays stale and notices are
+    # re-evaluated; that is bounded by the outage.)
+    if billing_row is not None and tiers.count_is_stale(
+            billing_row.member_count_at, now=datetime.now(timezone.utc)):
         await notices.maybe_notify(message.bot, chat=chat, row=billing_row,
-                                   entitlement=entitlement)
+                                   entitlement=entitlement,
+                                   observing=chats.is_observing(chat))
 
     outcome = await pipeline.evaluate(
         _client,

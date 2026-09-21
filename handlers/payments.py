@@ -16,6 +16,7 @@ is specific enough on its own, and it is the only message handler in this
 module, so there is nothing else for a chat-type filter to protect.
 """
 import functools
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -46,6 +47,34 @@ def _known_prices() -> set[int]:
     return {tiers.price_for(tiers.SMALL), tiers.price_for(tiers.LARGE)}
 
 
+def parse_chat_id(payload: str) -> int | None:
+    """Which chat an invoice payload names, or None if it is not ours.
+
+    Checks the shape and nothing about the price: the prefix, the field count,
+    that both fields are integers, and that the chat id fits sqlite's signed
+    64-bit INTEGER (int() would parse a wider one happily and sqlite3 would
+    then raise OverflowError, which is not a sqlite3.Error and would escape
+    best_effort).
+
+    Used on the successful-payment path, where the money has already moved.
+    The price must NOT be checked there: it locks at subscribe time, Telegram
+    renews at whatever the original invoice named, and config.PRICE_* is
+    env-tunable - so a price rise would otherwise make every existing
+    subscriber's renewal unreadable while Telegram kept charging them.
+    """
+    parts = payload.split(":")
+    if len(parts) != 3 or parts[0] != "sub":
+        return None
+    try:
+        chat_id = int(parts[1])
+        int(parts[2])
+    except ValueError:
+        return None
+    if not (_SQLITE_INT_MIN <= chat_id <= _SQLITE_INT_MAX):
+        return None
+    return chat_id
+
+
 def parse_payload(payload: str) -> tuple[int, int] | None:
     """(chat_id, stars) from an invoice payload, or None if it is not ours.
 
@@ -53,16 +82,15 @@ def parse_payload(payload: str) -> tuple[int, int] | None:
     that, a crafted invoice could buy a subscription for one star: the payload
     round-trips through the buyer's client, so nothing in it is trustworthy on
     the way back.
+
+    That check belongs at pre-checkout and only there - it is what refuses the
+    crafted invoice before any money moves. See parse_chat_id for why the same
+    check would destroy the record if it ran after the charge.
     """
-    parts = payload.split(":")
-    if len(parts) != 3 or parts[0] != "sub":
+    chat_id = parse_chat_id(payload)
+    if chat_id is None:
         return None
-    try:
-        chat_id, stars = int(parts[1]), int(parts[2])
-    except ValueError:
-        return None
-    if not (_SQLITE_INT_MIN <= chat_id <= _SQLITE_INT_MAX):
-        return None
+    stars = int(payload.split(":")[2])
     if stars not in _known_prices():
         return None
     return chat_id, stars
@@ -104,15 +132,31 @@ async def on_pre_checkout(query: PreCheckoutQuery) -> None:
 @router.message(F.successful_payment)
 async def on_successful_payment(message: Message) -> None:
     payment = message.successful_payment
-    parsed = parse_payload(payment.invoice_payload)
-    if parsed is None:
+    # from_user is Optional in aiogram and is absent for a channel post -
+    # precisely the delivery this handler accepts no chat-type filter in order
+    # to catch. Reading .id off None would raise AttributeError, which is
+    # neither sqlite3.Error nor TelegramAPIError, escape the handler unhandled
+    # and lose the charge with no ledger row at all. The ledger column is NOT
+    # NULL, so an unknown payer is recorded as 0 and shouted about instead.
+    payer_user_id = message.from_user.id if message.from_user else 0
+    if message.from_user is None:
+        log.error("payment %s arrived with no from_user; recording it against "
+                  "payer 0 - the charge id is the only handle on who paid",
+                  payment.telegram_payment_charge_id)
+
+    # The price is deliberately not re-checked here: see parse_chat_id.
+    chat_id = parse_chat_id(payment.invoice_payload)
+    if chat_id is None:
         # Money moved and we cannot tell for whom. Nothing can be credited,
         # but this must be loud: the charge id below is the only handle on it.
         log.error("payment %s from user %s has an unusable payload %r",
-                  payment.telegram_payment_charge_id, message.from_user.id,
+                  payment.telegram_payment_charge_id, payer_user_id,
                   payment.invoice_payload)
         return
-    chat_id, stars = parsed
+    # Telegram's own figure for what it charged, not the payload's copy of it.
+    # The payload round-trips through the buyer's client; this does not, and
+    # the ledger exists to say what actually moved.
+    stars = payment.total_amount
 
     expiry = None
     if payment.subscription_expiration_date:
@@ -146,7 +190,7 @@ async def on_successful_payment(message: Message) -> None:
         functools.partial(
             billing.record_payment,
             charge_id=payment.telegram_payment_charge_id, chat_id=chat_id,
-            payer_user_id=message.from_user.id, stars=stars,
+            payer_user_id=payer_user_id, stars=stars,
             is_recurring=bool(payment.is_recurring), expires_at=expires_at))
 
     lang = _lang(chat_id)
@@ -163,7 +207,12 @@ async def on_successful_payment(message: Message) -> None:
     log.info("chat %s paid %s stars until %s (recurring=%s)",
              chat_id, stars, expires_at, bool(payment.is_recurring))
     days = tiers.days_left(expires_at, now=datetime.now(timezone.utc))
-    await _say(message, t("pay_thanks", lang, title=_title(chat_id), days=days)
+    # The reply goes out under the bot's default ParseMode.HTML and the title
+    # is the group's own, chosen by whoever named it. An unescaped "&" or "<"
+    # makes Telegram reject the whole send, so the payer would be charged and
+    # never thanked. Escaped exactly as core.cards and handlers.admin do it.
+    await _say(message,
+               t("pay_thanks", lang, title=html.escape(_title(chat_id)), days=days)
                + "\n\n" + t("pay_cancel_hint", lang))
 
 

@@ -215,3 +215,44 @@ def test_a_payment_clears_the_notice_stage_so_a_later_lapse_is_announced():
     billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
                            stars=50, is_recurring=False, expires_at="2026-10-21T12:00:00+00:00")
     assert billing.get(-100123).notified_stage is None
+
+
+def test_the_ledger_row_is_committed_before_the_chat_is_credited():
+    """The ledger is the only record that exists when a charge is disputed, so
+    it must be durable before the billing upsert is even attempted.
+
+    Read back over a *second* connection on purpose: an uncommitted row is
+    perfectly visible to the connection that wrote it, so asserting through
+    storage.db's own connection would pass against the very bug this guards -
+    a ledger insert sharing one implicit transaction with the upsert that
+    failed, rolled back with it, and leaving a charge with no record at all.
+    """
+    import sqlite3
+
+    import config
+    from storage import billing, db
+
+    conn = db.connect()
+    # The upsert has nowhere to write. Any sqlite3.Error would do; dropping
+    # the table is the one that cannot be mistaken for a mocked failure.
+    conn.execute("DROP TABLE billing")
+    conn.commit()
+
+    with pytest.raises(sqlite3.Error):
+        billing.record_payment(charge_id="ch_1", chat_id=-100123, payer_user_id=7,
+                               stars=50, is_recurring=False,
+                               expires_at="2026-10-21T12:00:00+00:00")
+
+    other = sqlite3.connect(config.DB_PATH)
+    try:
+        rows = other.execute(
+            "SELECT chat_id, payer_user_id, stars FROM payments "
+            "WHERE telegram_payment_charge_id = ?", ("ch_1",)).fetchall()
+    finally:
+        other.close()
+    assert rows == [(-100123, 7, 50)], (
+        "the charge left no durable record: money moved and nothing outside "
+        "the failing transaction can see that it did")
+    assert not conn.in_transaction, (
+        "the failed upsert left a transaction open, so the next write on this "
+        "connection inherits it")

@@ -158,6 +158,13 @@ and are writing nothing new. The human decision recorded against a message is
 kept, but not the text itself. The audit log the bot keeps for every evaluation never stores
 message text at all.
 
+One thing the bot keeps forever: when someone pays for a group, it records
+who paid, for which group, when, and the Telegram charge id, alongside the
+member count it caches per chat. That ledger is append-only and nothing ever
+deletes from it, because a disputed or refunded charge cannot be looked up
+without it — Telegram sends no "payment revoked" update, so this is the only
+record that will exist.
+
 Any admin can turn classification off for their chat at any time with
 `/chats`. This section is meant to match exactly what the bot's own
 `/privacy` command tells an admin in Telegram — if the two ever disagree,

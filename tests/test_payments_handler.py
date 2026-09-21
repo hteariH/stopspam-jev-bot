@@ -18,21 +18,33 @@ def fresh_db(monkeypatch):
 
 
 class FakeMessage:
-    def __init__(self, *, charge_id, payload, user_id, expiration):
+    def __init__(self, *, charge_id, payload, user_id, expiration, amount=None):
         self.successful_payment = _FakeSuccessfulPayment(
             telegram_payment_charge_id=charge_id,
             invoice_payload=payload,
             subscription_expiration_date=expiration,
             is_recurring=True,
-            total_amount=None,
+            # Telegram reports what it actually charged. Defaulting it to the
+            # payload's own figure is what a real invoice produces, so a test
+            # that does not care about the amount still gets a truthful one.
+            total_amount=_amount_from(payload) if amount is None else amount,
             currency="XTR",
         )
-        self.from_user = _FakeUser(user_id)
-        self.chat = _FakeChat(user_id)
+        # None stands in for a channel post, where the Bot API omits from_user.
+        self.from_user = _FakeUser(user_id) if user_id is not None else None
+        self.chat = _FakeChat(user_id if user_id is not None else -100999)
         self.replies = []
 
     async def answer(self, text):
         self.replies.append(text)
+
+
+def _amount_from(payload: str) -> int:
+    parts = payload.split(":")
+    try:
+        return int(parts[2])
+    except (IndexError, ValueError):
+        return 0
 
 
 class _FakeSuccessfulPayment:
@@ -252,3 +264,120 @@ async def test_pre_checkout_is_always_answered_even_when_telegram_fails():
     query = FakePreCheckout(payload="sub:-100123:50", currency="XTR", amount=50,
                             raises=TelegramAPIError(method=None, message="boom"))
     await payments.on_pre_checkout(query)  # must not raise
+
+
+async def test_a_chat_id_parses_without_judging_the_price():
+    """parse_chat_id is what the money path uses. It validates the shape of a
+    payload and nothing about what we charge today, because the price locks at
+    subscribe time and config.PRICE_* is env-tunable."""
+    from handlers import payments
+    assert payments.parse_chat_id("sub:-100123:50") == -100123
+    assert payments.parse_chat_id("sub:-100123:1") == -100123
+
+
+@pytest.mark.parametrize("payload", [
+    "", "sub", "sub:-100123", "sub:-100123:50:extra", "buy:-100123:50",
+    "sub:notanumber:50", "sub:-100123:notanumber",
+])
+def test_parse_chat_id_still_refuses_a_malformed_payload(payload):
+    from handlers import payments
+    assert payments.parse_chat_id(payload) is None
+
+
+def test_parse_chat_id_refuses_a_chat_id_outside_sqlites_integer_range():
+    """int() parses it fine and sqlite3 then raises OverflowError, which is
+    not a sqlite3.Error and would escape best_effort."""
+    from handlers import payments
+    assert payments.parse_chat_id(f"sub:{2**63}:50") is None
+
+
+async def test_a_renewal_at_a_price_we_no_longer_sell_is_still_credited(monkeypatch):
+    """Raising a price must not stop crediting the subscribers already on the
+    old one.
+
+    The price locks at subscribe time, so Telegram keeps charging a renewing
+    subscriber the amount their original invoice named. Refusing that payload
+    here would write no ledger row and never extend paid_until, while the money
+    kept moving - and a recurring renewal sends no pre_checkout_query, so
+    nothing upstream would catch it.
+    """
+    import config
+    from handlers import payments
+    from storage import billing, chats, db
+    chats.ensure_chat(-100123, "Group")
+    monkeypatch.setattr(config, "PRICE_SMALL_STARS", 80)
+    monkeypatch.setattr(config, "PRICE_LARGE_STARS", 400)
+
+    await payments.on_successful_payment(FakeMessage(
+        charge_id="ch_old_price", payload="sub:-100123:50", user_id=7,
+        expiration=1790000000, amount=50))
+
+    row = billing.get(-100123)
+    assert row.paid_until is not None, "an existing subscriber stopped being credited"
+    assert row.stars == 50, "the amount recorded is the one Telegram charged"
+    ledger = db.connect().execute(
+        "SELECT stars FROM payments WHERE telegram_payment_charge_id = ?",
+        ("ch_old_price",)).fetchall()
+    assert [r["stars"] for r in ledger] == [50]
+
+
+async def test_the_amount_recorded_is_telegrams_figure_not_the_payloads():
+    """The payload round-trips through the buyer's client; total_amount does
+    not. When they disagree, the ledger records the one that moved money."""
+    from handlers import payments
+    from storage import billing, chats
+    chats.ensure_chat(-100123, "Group")
+    await payments.on_successful_payment(FakeMessage(
+        charge_id="ch_amt", payload="sub:-100123:50", user_id=7,
+        expiration=1790000000, amount=250))
+    assert billing.get(-100123).stars == 250
+
+
+async def test_a_payment_with_no_from_user_is_still_recorded(caplog):
+    """A channel post carries no from_user. The chat-type filter was removed
+    precisely so such a payment is still recorded, so reading .id off None
+    here would raise AttributeError - neither sqlite3.Error nor
+    TelegramAPIError - escape the handler, and lose the charge entirely.
+    """
+    import logging
+    from handlers import payments
+    from storage import billing, chats, db
+    chats.ensure_chat(-100123, "Group")
+    with caplog.at_level(logging.ERROR, logger="stopspam.payments"):
+        await payments.on_successful_payment(FakeMessage(
+            charge_id="ch_nouser", payload="sub:-100123:50", user_id=None,
+            expiration=1790000000))
+    assert billing.get(-100123).paid_until is not None
+    ledger = db.connect().execute(
+        "SELECT payer_user_id FROM payments WHERE telegram_payment_charge_id = ?",
+        ("ch_nouser",)).fetchall()
+    assert len(ledger) == 1, "the charge left no ledger row"
+    assert "ch_nouser" in caplog.text, (
+        "the missing payer must be logged loudly, naming the charge id - it is "
+        "the only handle on a charge nobody can be matched to")
+
+
+async def test_a_payment_with_no_from_user_and_a_bad_payload_still_logs_the_charge(caplog):
+    """The other unguarded site. Nothing can be credited here, so the log line
+    carrying the charge id is all that is left of the money."""
+    import logging
+    from handlers import payments
+    with caplog.at_level(logging.ERROR, logger="stopspam.payments"):
+        await payments.on_successful_payment(FakeMessage(
+            charge_id="ch_bad", payload="garbage", user_id=None, expiration=None))
+    assert "ch_bad" in caplog.text
+
+
+async def test_the_thank_you_escapes_a_group_title_telegram_would_reject():
+    """The reply goes out under ParseMode.HTML. A group named "Dogs & Cats"
+    would otherwise have its receipt rejected by Telegram - the payer charged
+    and never thanked."""
+    from handlers import payments
+    from storage import chats
+    chats.ensure_chat(-100123, "Dogs & Cats <b>")
+    message = FakeMessage(charge_id="ch_esc", payload="sub:-100123:50",
+                          user_id=7, expiration=1790000000)
+    await payments.on_successful_payment(message)
+    assert message.replies, "the payer was not thanked at all"
+    assert "Dogs &amp; Cats &lt;b&gt;" in message.replies[0]
+    assert "Dogs & Cats" not in message.replies[0]

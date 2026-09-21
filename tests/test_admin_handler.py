@@ -7,14 +7,17 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import (AnswerCallbackQuery, EditMessageText, GetChatMember,
-                             GetMe, SendMessage)
+from aiogram.methods import (AnswerCallbackQuery, CreateInvoiceLink, EditMessageText,
+                             GetChatMember, GetMe, SendMessage)
 from aiogram.types import (CallbackQuery, Chat, ChatMemberAdministrator, ChatMemberMember,
                            Message, Update, User)
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 GROUP, ADMIN, BYSTANDER = -100123, 777, 888
 calls: list = []
+# Non-empty makes the next create_invoice_link fail, standing in for Telegram
+# refusing to mint a link.
+invoice_fails: list = []
 # A single Dispatcher per test, built lazily on first feed() and cleared by
 # the fixture: aiogram refuses to attach the same Router to two Dispatchers,
 # and a test that calls feed() more than once (e.g. toggling a setting twice,
@@ -34,6 +37,7 @@ def fresh(monkeypatch):
     from storage import chats, db, trust
     db.reset()
     calls.clear()
+    invoice_fails.clear()
     chats.ensure_chat(GROUP, "Python Chat")
     # /chats only considers chats this user is plausibly in - a trust row (a
     # message they posted) or a log chat pointed at them. An admin who has
@@ -72,6 +76,10 @@ async def fake_call(self, method, request_timeout=None):
             raise TelegramBadRequest(method=method, message="Bad Request: can't parse entities")
         return Message(message_id=1, date=NOW, chat=Chat(id=method.chat_id, type="private"),
                        text=method.text)
+    if isinstance(method, CreateInvoiceLink):
+        if invoice_fails:
+            raise TelegramBadRequest(method=method, message="Bad Request: nope")
+        return "https://t.me/$invoice_test"
     if isinstance(method, GetChatMember):
         if method.user_id == ADMIN:
             return ChatMemberAdministrator(
@@ -416,3 +424,88 @@ async def test_a_non_admin_cannot_end_the_observation_window():
 def test_gonow_is_an_accepted_callback_field():
     from handlers import admin
     assert admin._parse_callback("cfg:-100123:gonow") == (-100123, "gonow", None)
+
+
+def _buttons(markup):
+    return [b for row in markup.inline_keyboard for b in row]
+
+
+async def test_the_subscribe_button_survives_a_button_press():
+    """The callback path re-renders the menu too, and an admin who presses
+    "start deleting now" on an unpaid large group is at the exact moment
+    enforcement becomes payment-gated. Handing them back a menu with no way to
+    pay is the worst possible time to lose the button."""
+    from storage import billing
+    billing.set_member_count(GROUP, 5000)
+    await feed(tap(f"cfg:{GROUP}:gonow"))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert edits, "the menu was never re-rendered"
+    assert any(b.url for b in _buttons(edits[-1].reply_markup)), (
+        "the re-rendered menu offers no way to subscribe")
+
+
+async def test_a_language_toggle_does_not_lose_the_subscribe_button_either():
+    from storage import billing
+    billing.set_member_count(GROUP, 5000)
+    await feed(tap(f"cfg:{GROUP}:lang"))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert any(b.url for b in _buttons(edits[-1].reply_markup))
+
+
+async def test_a_re_render_says_so_when_no_invoice_link_can_be_made():
+    """The note that replaces the button lives on the same path, so it was
+    missing from the callback render for the same reason."""
+    from storage import billing
+    billing.set_member_count(GROUP, 5000)
+    invoice_fails.append(True)
+    await feed(tap(f"cfg:{GROUP}:mode"))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert edits and not any(b.url for b in _buttons(edits[-1].reply_markup))
+    assert "<i>" in edits[-1].text, "the menu does not say the link is unavailable"
+
+
+async def test_a_subscribed_chat_is_not_offered_the_button_again():
+    """The offer is conditional, and the condition must survive the move onto
+    the shared path - otherwise this test would pass against a helper that
+    appends the button unconditionally."""
+    from datetime import timedelta
+
+    from storage import billing
+    billing.set_member_count(GROUP, 5000)
+    billing.record_payment(
+        charge_id="ch_1", chat_id=GROUP, payer_user_id=ADMIN, stars=250,
+        is_recurring=False,
+        expires_at=(datetime.now(timezone.utc) + timedelta(days=30)).isoformat())
+    await feed(tap(f"cfg:{GROUP}:mode"))
+    edits = [c for c in calls if isinstance(c, EditMessageText)]
+    assert edits and not any(b.url for b in _buttons(edits[-1].reply_markup))
+
+
+async def test_privacy_admits_the_permanent_payment_record():
+    """Everything else in this text is a promise that data goes away: message
+    text within 7 days, no text at all in the audit log. The payments ledger
+    is append-only and nothing deletes from it, so a reader of the old text
+    would conclude no personal data persists. README.md commits in writing
+    that the two documents agree."""
+    await feed(dm("/privacy"))
+    body = sent()[-1].text.lower()
+    assert "permanent record" in body
+    assert "who paid" in body
+    assert "refunded" in body or "disputed" in body
+
+
+def test_every_language_admits_the_permanent_payment_record():
+    """A promise about retained personal data that only English speakers get
+    is not a promise."""
+    from texts import STRINGS
+    for lang, marker in (("en", "permanent"), ("ru", "навсегда"), ("uk", "назавжди")):
+        body = STRINGS["privacy"][lang]
+        assert marker in body.lower(), f"{lang} privacy text omits the payment record"
+
+
+def test_the_readme_and_the_privacy_text_agree_about_the_payment_record():
+    """They are two renderings of one promise; the README says so itself."""
+    import io
+    readme = io.open("README.md", encoding="utf-8").read().lower()
+    assert "who paid" in readme
+    assert "append-only" in readme

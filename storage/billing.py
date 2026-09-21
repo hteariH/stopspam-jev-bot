@@ -4,6 +4,7 @@ Kept apart from storage.chats on purpose: the moderation settings and the
 money are read by different code for different reasons, and this table can be
 dropped without touching a single moderation setting.
 """
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -99,8 +100,16 @@ def record_payment(*, charge_id: str, chat_id: int, payer_user_id: int, stars: i
     nothing at all is written: Telegram can redeliver an update, and without
     this guard one payment would grant sixty days.
 
-    The ledger row is written first and is never rolled back, because the
-    ledger is the only place a disputed charge can be looked up later.
+    The ledger row is committed on its own, before the chat is credited, and
+    is never rolled back. That ordering is the whole point of this function:
+    the two writes would otherwise share one implicit transaction, so a
+    failing upsert would take the ledger row down with it and leave a charge
+    that moved real money with no record anywhere that a dispute could be
+    answered from. Crediting the chat is the recoverable half - a redelivery
+    or a manual fix can still do it - so it is the half allowed to fail.
+
+    Raises sqlite3.Error if the chat could not be credited, after the ledger
+    row is safely committed and the connection has been rolled back to it.
     """
     conn = db.connect()
     stamp = db.now()
@@ -114,24 +123,31 @@ def record_payment(*, charge_id: str, chat_id: int, payer_user_id: int, stars: i
     if cursor.rowcount == 0:
         conn.commit()
         return False
+    conn.commit()
 
     # grace_until is deliberately absent from the update list. It is set once,
     # ever - clearing it here would hand back a second free trial to anyone who
     # paid for one month and cancelled.
-    conn.execute(
-        """INSERT INTO billing (chat_id, paid_until, payer_user_id, stars,
-                                charge_id, notified_stage, updated_at)
-           VALUES (?, ?, ?, ?, ?, NULL, ?)
-           ON CONFLICT (chat_id) DO UPDATE SET
-             paid_until     = excluded.paid_until,
-             payer_user_id  = excluded.payer_user_id,
-             stars          = excluded.stars,
-             charge_id      = excluded.charge_id,
-             notified_stage = NULL,
-             updated_at     = excluded.updated_at""",
-        (chat_id, expires_at, payer_user_id, stars, charge_id, stamp),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            """INSERT INTO billing (chat_id, paid_until, payer_user_id, stars,
+                                    charge_id, notified_stage, updated_at)
+               VALUES (?, ?, ?, ?, ?, NULL, ?)
+               ON CONFLICT (chat_id) DO UPDATE SET
+                 paid_until     = excluded.paid_until,
+                 payer_user_id  = excluded.payer_user_id,
+                 stars          = excluded.stars,
+                 charge_id      = excluded.charge_id,
+                 notified_stage = NULL,
+                 updated_at     = excluded.updated_at""",
+            (chat_id, expires_at, payer_user_id, stars, charge_id, stamp),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        # Leaves the shared connection clean for the next caller, and lets
+        # guards.best_effort answer None so the handler logs the charge id.
+        conn.rollback()
+        raise
     return True
 
 
