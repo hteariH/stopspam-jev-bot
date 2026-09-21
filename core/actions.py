@@ -5,10 +5,10 @@ import logging
 
 from aiogram.exceptions import TelegramAPIError
 
-from core import guards, pipeline
+from core import guards, offer, pipeline
 from core.cards import (card_keyboard, render_card,
                         render_outage_notice)
-from core.policy import Action
+from core.policy import Action, REASON_NOT_ENTITLED
 from core.ratelimit import RateLimiter
 from storage import audit, reviews
 from texts import t
@@ -123,7 +123,16 @@ async def apply(bot, *, message, outcome, chat, limiter: RateLimiter) -> str:
         )
         if deleted:
             body += f"\n\n<i>{t('card_deleted', chat.lang)}</i>"
-        keyboard = card_keyboard(review_id, chat.lang) if review_id is not None else None
+        # The invoice link is fetched only when there is something to sell, so
+        # an ordinary card still costs no extra Telegram call.
+        subscribe_url, stars = None, 0
+        if decision.reason == REASON_NOT_ENTITLED and outcome.entitlement is not None:
+            stars = outcome.entitlement.price
+            subscribe_url = await offer.subscribe_link(
+                bot, chat_id=chat.chat_id, title=chat.title or str(chat.chat_id),
+                stars=stars, lang=chat.lang)
+        keyboard = card_keyboard(review_id, chat.lang,
+                                 subscribe_url=subscribe_url, stars=stars)
         try:
             await bot.send_message(target, body, reply_markup=keyboard)
             card_sent = True

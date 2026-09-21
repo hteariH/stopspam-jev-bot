@@ -161,3 +161,54 @@ def test_every_new_billing_key_exists_in_every_language():
         assert key in STRINGS, key
         assert set(STRINGS[key]) == {"en", "ru", "uk"}, key
         assert all(STRINGS[key][lang].strip() for lang in ("en", "ru", "uk")), key
+
+
+def _verdict():
+    from core.verdict import Verdict
+    return Verdict(is_spam=0.98, is_scam=0.99, solicits_contact=1.0,
+                   looks_like_member=0.02, kind="crypto", severity=2,
+                   severity_confidence=0.95, model="jev-test")
+
+
+def test_a_not_entitled_card_says_what_would_have_happened():
+    from core.policy import Action, Decision
+    body = render_card(
+        decision=Decision(Action.REVIEW, 0.95, "not_entitled"), verdict=_verdict(),
+        author_name="A", author_id=1, text="buy crypto",
+        chat_title="G", lang="ru")
+    assert "подписки" in body
+
+
+def test_an_ordinary_card_does_not_mention_subscriptions():
+    from core.policy import Action, Decision
+    body = render_card(
+        decision=Decision(Action.REVIEW, 0.60, "grey_zone"), verdict=_verdict(),
+        author_name="A", author_id=1, text="hello", chat_title="G", lang="ru")
+    assert "подписки" not in body
+
+
+def test_the_subscribe_button_carries_the_price_and_a_url():
+    markup = card_keyboard(42, "ru", subscribe_url="https://t.me/x", stars=250)
+    buttons = [b for row in markup.inline_keyboard for b in row]
+    subscribe = [b for b in buttons if b.url == "https://t.me/x"]
+    assert len(subscribe) == 1
+    assert "250" in subscribe[0].text
+
+
+def test_moderation_buttons_survive_alongside_the_subscribe_button():
+    markup = card_keyboard(42, "en", subscribe_url="https://t.me/x", stars=50)
+    data = [b.callback_data for row in markup.inline_keyboard for b in row
+            if b.callback_data]
+    assert data == ["rv:ban:42", "rv:del:42", "rv:ok:42"]
+
+
+def test_a_card_with_no_review_row_can_still_offer_the_subscription():
+    """The review row failing to write must not also cost the sale."""
+    markup = card_keyboard(None, "en", subscribe_url="https://t.me/x", stars=50)
+    buttons = [b for row in markup.inline_keyboard for b in row]
+    assert len(buttons) == 1
+    assert buttons[0].url == "https://t.me/x"
+
+
+def test_no_buttons_at_all_returns_none_rather_than_an_empty_keyboard():
+    assert card_keyboard(None, "en") is None

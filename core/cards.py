@@ -4,7 +4,7 @@ import html
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from core.policy import Decision
+from core.policy import Decision, REASON_NOT_ENTITLED
 from core.verdict import Verdict
 from texts import t
 
@@ -22,13 +22,17 @@ def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
     chat_title = _trim(chat_title, MAX_TITLE)
     author_name = _trim(author_name, MAX_NAME)
     quote = _trim(text or "", MAX_QUOTE)
-    return "\n".join([
+    lines = [
         f"<b>{html.escape(t('card_title', lang))}</b>",
         f"{html.escape(t('card_chat', lang))}: {html.escape(chat_title)}",
         f"{html.escape(t('card_author', lang))}: "
         f"{html.escape(author_name)} (<code>{author_id}</code>)",
         f"{html.escape(t('card_risk', lang))}: {decision.risk:.2f} ({html.escape(decision.reason)})",
         f"{html.escape(t('card_kind', lang))}: {html.escape(verdict.kind)}",
+    ]
+    if decision.reason == REASON_NOT_ENTITLED:
+        lines.append(f"<i>{html.escape(t('card_not_entitled', lang))}</i>")
+    lines += [
         "",
         f"<b>{html.escape(t('card_breakdown', lang))}</b>",
         f"<code>spam {verdict.is_spam:.2f} · scam {verdict.is_scam:.2f} · "
@@ -36,7 +40,8 @@ def render_card(*, decision: Decision, verdict: Verdict, author_name: str,
         f"severity {verdict.severity} (confidence {verdict.severity_confidence:.2f})</code>",
         "",
         f"<blockquote>{html.escape(quote)}</blockquote>",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def render_outage_notice(*, author_name: str, author_id: int, text: str | None,
@@ -63,9 +68,22 @@ def render_outage_notice(*, author_name: str, author_id: int, text: str | None,
     ])
 
 
-def card_keyboard(review_id: int, lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t("btn_ban", lang), callback_data=f"rv:ban:{review_id}"),
-        InlineKeyboardButton(text=t("btn_delete", lang), callback_data=f"rv:del:{review_id}"),
-        InlineKeyboardButton(text=t("btn_not_spam", lang), callback_data=f"rv:ok:{review_id}"),
-    ]])
+def card_keyboard(review_id: int | None, lang: str, *, subscribe_url: str | None = None,
+                  stars: int = 0) -> InlineKeyboardMarkup | None:
+    """The card's buttons, or None when there are none to show.
+
+    The two halves are independent on purpose. A review row that failed to
+    write costs the moderation buttons but must not also cost the sale, and a
+    chat with no subscription to sell still gets working moderation buttons.
+    """
+    rows = []
+    if review_id is not None:
+        rows.append([
+            InlineKeyboardButton(text=t("btn_ban", lang), callback_data=f"rv:ban:{review_id}"),
+            InlineKeyboardButton(text=t("btn_delete", lang), callback_data=f"rv:del:{review_id}"),
+            InlineKeyboardButton(text=t("btn_not_spam", lang), callback_data=f"rv:ok:{review_id}"),
+        ])
+    if subscribe_url:
+        rows.append([InlineKeyboardButton(text=t("btn_subscribe", lang, stars=stars),
+                                          url=subscribe_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
