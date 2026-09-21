@@ -15,19 +15,21 @@ def fresh(monkeypatch):
     importlib.reload(config)
     from storage import db
     db.reset()
-    # admin.router, review.router and group.router are module-level aiogram
-    # Routers, and aiogram refuses to attach a Router that already has a
-    # parent Dispatcher. This file calls bot.build_dispatcher() from more
-    # than one test in the same process, so each router module must be
-    # reloaded here to hand every test a fresh, unattached Router - mirrors
-    # the same fixture pattern in tests/test_group_handler.py and
-    # tests/test_admin_handler.py.
+    # admin.router, review.router, group.router and payments.router are
+    # module-level aiogram Routers, and aiogram refuses to attach a Router
+    # that already has a parent Dispatcher. This file calls
+    # bot.build_dispatcher() from more than one test in the same process, so
+    # each router module must be reloaded here to hand every test a fresh,
+    # unattached Router - mirrors the same fixture pattern in
+    # tests/test_group_handler.py and tests/test_admin_handler.py.
     import handlers.admin
     import handlers.group
+    import handlers.payments
     import handlers.review
     importlib.reload(handlers.admin)
     importlib.reload(handlers.review)
     importlib.reload(handlers.group)
+    importlib.reload(handlers.payments)
     yield
     db.reset()
 
