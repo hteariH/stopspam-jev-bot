@@ -58,6 +58,10 @@ Cards go to a private destination instead:
   in will post its cards there from then on. You must be an admin of both the
   moderator group and the groups being redirected.
 
+Telegram will not let a bot open a conversation with you, so if cards are
+going to your direct messages, open a chat with the bot and press **Start**
+once. Until you do, it cannot deliver them.
+
 If a group somehow has no destination, the card is skipped and the reason is
 logged. The bot does not fall back to the group itself. The audit row still
 records what was decided, so nothing is lost silently.

@@ -341,3 +341,20 @@ async def test_privacy_names_what_is_never_sent():
     assert "never send" in body
     assert "admins and owners" in body
     assert "neither text nor a caption" in body
+
+
+async def test_a_failed_dm_does_not_escape_the_handler():
+    """No unhandled exception may leave a handler. fake_call rejects any
+    message containing "<chat>", which here stands in for any Telegram
+    failure on the reply itself.
+
+    Production edit this catches: going back to a bare
+    `await message.answer(...)` in on_privacy and the other DM commands.
+    """
+    import texts
+    original = texts.STRINGS["help"]["en"]
+    texts.STRINGS["help"]["en"] = "broken <chat> text"
+    try:
+        await feed(dm("/help"))
+    finally:
+        texts.STRINGS["help"]["en"] = original

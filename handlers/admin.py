@@ -138,29 +138,41 @@ def _menu(chat) -> tuple[str, InlineKeyboardMarkup]:
     return body, keyboard
 
 
+async def _say(message: Message, body: str) -> None:
+    """Answers a DM without letting a Telegram failure escape the handler.
+
+    Nothing here is retried or recovered - the point is only that no
+    unhandled exception leaves a handler, which is this project's rule.
+    """
+    try:
+        await message.answer(body)
+    except TelegramAPIError as exc:
+        log.warning("could not reply to user %s: %s", message.chat.id, exc)
+
+
 @router.message(CommandStart())
 async def on_start(message: Message) -> None:
-    await message.answer(t("welcome"))
+    await _say(message, t("welcome"))
 
 
 @router.message(Command("help"))
 async def on_help(message: Message) -> None:
-    await message.answer(t("help"))
+    await _say(message, t("help"))
 
 
 @router.message(Command("privacy"))
 async def on_privacy(message: Message) -> None:
-    await message.answer(t("privacy"))
+    await _say(message, t("privacy"))
 
 
 @router.message(Command("chats"))
 async def on_chats(message: Message) -> None:
     if not _chats_limiter.allow(message.from_user.id):
-        await message.answer(t("too_many_requests"))
+        await _say(message, t("too_many_requests"))
         return
     owned = await _admin_chats(message.bot, message.from_user.id)
     if not owned:
-        await message.answer(t("no_chats"))
+        await _say(message, t("no_chats"))
         return
     for chat in owned:
         body, keyboard = _menu(chat)
