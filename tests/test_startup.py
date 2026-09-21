@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 
 import pytest
@@ -57,3 +58,36 @@ async def test_housekeeping_purges_expired_reviews():
 
     await bot.housekeeping(once=True)
     assert reviews.get(rid)["text"] is None
+
+
+async def test_housekeeping_survives_a_storage_error(monkeypatch):
+    """A transient sqlite failure must not kill the unattended hourly loop."""
+    import bot
+    from storage import reviews
+
+    def boom(*args, **kwargs):
+        raise sqlite3.Error("disk full")
+
+    monkeypatch.setattr(reviews, "purge_expired", boom)
+
+    # Must return normally, not raise - this is the whole point of the
+    # guard: one bad pass should not end the loop for the life of the
+    # process.
+    await bot.housekeeping(once=True)
+
+
+async def test_housekeeping_does_not_swallow_other_errors(monkeypatch):
+    """The guard is narrow: only sqlite3.Error is a storage failure worth
+    absorbing. Anything else is a programming error and must still surface,
+    per this project's narrow-exception-handling contract.
+    """
+    import bot
+    from storage import reviews
+
+    def boom(*args, **kwargs):
+        raise ValueError("not a storage error")
+
+    monkeypatch.setattr(reviews, "purge_expired", boom)
+
+    with pytest.raises(ValueError):
+        await bot.housekeeping(once=True)

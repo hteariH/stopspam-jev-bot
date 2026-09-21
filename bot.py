@@ -22,6 +22,13 @@ log = logging.getLogger("stopspam")
 
 HOUSEKEEPING_INTERVAL = 3600
 
+# asyncio.create_task() only keeps a weak reference to the task it returns -
+# if nothing else holds a strong reference, the event loop is free to
+# garbage-collect the task mid-flight, silently ending the housekeeping loop
+# for the rest of the process. Assigning the task here, at module scope,
+# keeps it alive for as long as the process runs.
+_housekeeping_task: asyncio.Task | None = None
+
 
 def build_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
@@ -51,6 +58,26 @@ async def housekeeping(once: bool = False) -> None:
         await asyncio.sleep(HOUSEKEEPING_INTERVAL)
 
 
+def _report_housekeeping_death(task: asyncio.Task) -> None:
+    """Logs a housekeeping task that died from something its own
+    sqlite3.Error guard did not catch.
+
+    Nothing awaits this task, so without this callback such a death would
+    surface only as asyncio's own "Task exception was never retrieved"
+    warning - and only once the garbage collector happens to reclaim the
+    task, which may be much later or never. This just makes the failure
+    visible in the log immediately; it does not restart the loop. That is a
+    deliberate choice: a housekeeping loop that failed on something other
+    than a storage error hit a bug worth looking at, not a transient
+    condition worth silently retrying forever.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("housekeeping task died unexpectedly", exc_info=exc)
+
+
 async def main() -> None:
     if not config.BOT_TOKEN:
         raise SystemExit("BOT_TOKEN is not set")
@@ -64,7 +91,9 @@ async def main() -> None:
         BotCommand(command="privacy", description="What data the bot sends and keeps"),
         BotCommand(command="help", description="How this bot works"),
     ])
-    asyncio.create_task(housekeeping())
+    global _housekeeping_task
+    _housekeeping_task = asyncio.create_task(housekeeping())
+    _housekeeping_task.add_done_callback(_report_housekeeping_death)
     await build_dispatcher().start_polling(bot)
 
 
