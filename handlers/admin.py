@@ -36,7 +36,7 @@ MAX_MENU_CHATS = 20
 # spec asks for on this command.
 CHATS_PER_MINUTE = 3
 _chats_limiter = ratelimit.RateLimiter(CHATS_PER_MINUTE)
-_LANGS = ("en", "ru")
+_LANGS = ("en", "ru", "uk")
 _TOGGLE_FIELDS = {"mode", "jev", "lang", "log"}
 _THRESHOLD_FIELDS = {"delete_threshold", "review_threshold", "confidence_floor"}
 _DELTAS = {"+", "-"}

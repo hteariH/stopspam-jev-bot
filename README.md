@@ -39,6 +39,11 @@ bot. Nothing about crossing day 7 turns enforcement on by itself. A chat can
 also be put back into observe mode at any time, and classification itself
 can be switched off entirely per chat.
 
+The bot speaks **English, Russian and Ukrainian**, set per chat from the same
+menu. English is the default and the fallback: a string with no translation
+appears in English rather than blank, and a test fails the build if any string
+is missing from any language.
+
 ## Where review cards go
 
 Everything the bot is unsure about becomes a **review card**: the message
