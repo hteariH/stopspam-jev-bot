@@ -107,11 +107,20 @@ def test_start_grace_writes_a_future_timestamp():
 
 def test_start_grace_never_overwrites_an_existing_window():
     """A group oscillating around 200 members must not farm free trials."""
-    from storage import billing
-    first = billing.start_grace(-100123)
-    second = billing.start_grace(-100123)
-    assert second == first
-    assert billing.get(-100123).grace_until == first
+    from storage import billing, db
+    # Pin a sentinel value that a fresh computation could never produce
+    billing.start_grace(-100123)
+    sentinel = "2099-01-01T00:00:00+00:00"
+    conn = db.connect()
+    conn.execute(
+        "UPDATE billing SET grace_until = ? WHERE chat_id = ?",
+        (sentinel, -100123)
+    )
+    conn.commit()
+    # A missing COALESCE would overwrite the sentinel
+    result = billing.start_grace(-100123)
+    assert result == sentinel
+    assert billing.get(-100123).grace_until == sentinel
 
 
 def test_start_grace_preserves_a_member_count_already_recorded():
