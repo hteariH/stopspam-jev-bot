@@ -9,7 +9,6 @@ configured is always looked up fresh, never read from our own database.
 import functools
 import html
 import logging
-import sqlite3
 
 from aiogram import F, Router
 from aiogram.enums import ChatType
@@ -18,8 +17,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
                            Message)
 
-from core import guards
-from storage import chats, db
+from core import guards, ratelimit
+from storage import chats
 from texts import t
 
 log = logging.getLogger("stopspam.admin")
@@ -28,6 +27,15 @@ router = Router(name="admin")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 THRESHOLD_STEP = 0.05
+
+# Hard cap on how many chats one /chats can look up and render. Nothing about
+# a genuine admin needs more than this, and it bounds what a stranger can
+# make the bot spend in one command.
+MAX_MENU_CHATS = 20
+# ...and a per-user limit on how often they can spend it at all, which the
+# spec asks for on this command.
+CHATS_PER_MINUTE = 3
+_chats_limiter = ratelimit.RateLimiter(CHATS_PER_MINUTE)
 _LANGS = ("en", "ru")
 _TOGGLE_FIELDS = {"mode", "jev", "lang"}
 _THRESHOLD_FIELDS = {"delete_threshold", "review_threshold", "confidence_floor"}
@@ -48,16 +56,19 @@ _best_effort = functools.partial(guards.best_effort, log)
 
 
 async def _admin_chats(bot, user_id: int) -> list:
-    """Chats the caller administers, re-verified against Telegram, not cached."""
-    try:
-        rows = db.connect().execute("SELECT chat_id FROM chats").fetchall()
-    except sqlite3.Error as exc:
-        log.warning("storage call failed (list_chats) for user %s: %s", user_id, exc)
-        return []
+    """Chats the caller administers, re-verified against Telegram, not cached.
+
+    The candidate set is narrowed in storage first; only those are looked up
+    against Telegram, so the number of get_chat_member calls this command can
+    cause is bounded by MAX_MENU_CHATS rather than by the size of the chats
+    table.
+    """
+    candidates = _best_effort("candidate_chats", user_id, chats.candidate_chat_ids,
+                              user_id, MAX_MENU_CHATS) or []
     result = []
-    for row in rows:
-        if await guards.is_admin(bot, row["chat_id"], user_id):
-            chat = _best_effort("get_chat", row["chat_id"], chats.get_chat, row["chat_id"])
+    for chat_id in candidates:
+        if await guards.is_admin(bot, chat_id, user_id):
+            chat = _best_effort("get_chat", chat_id, chats.get_chat, chat_id)
             if chat is not None:
                 result.append(chat)
     return result
@@ -125,6 +136,9 @@ async def on_privacy(message: Message) -> None:
 
 @router.message(Command("chats"))
 async def on_chats(message: Message) -> None:
+    if not _chats_limiter.allow(message.from_user.id):
+        await message.answer(t("too_many_requests"))
+        return
     owned = await _admin_chats(message.bot, message.from_user.id)
     if not owned:
         await message.answer(t("no_chats"))

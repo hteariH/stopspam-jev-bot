@@ -60,6 +60,10 @@ CREATE TABLE IF NOT EXISTS audit (
   created_at TEXT NOT NULL
 );
 
+-- The trust primary key is (chat_id, user_id), so "which chats has this
+-- user been seen in" - the candidate set behind /chats - would otherwise be
+-- a full scan of every member of every group the bot is in.
+CREATE INDEX IF NOT EXISTS idx_trust_user ON trust (user_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_chat ON reviews (chat_id, decided_at);
 CREATE INDEX IF NOT EXISTS idx_audit_chat ON audit (chat_id, created_at);
 """

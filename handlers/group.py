@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 
 import config
-from core import actions, guards, pipeline, state
+from core import actions, guards, pipeline, ratelimit, state
 from core.jev import JevClient
 from storage import chats, trust
 
@@ -18,7 +18,7 @@ router = Router(name="group")
 router.message.filter(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
 
 _client: JevClient | None = None
-_limiter = actions.EnforcementLimiter(config.ENFORCEMENT_PER_MINUTE)
+_limiter = ratelimit.RateLimiter(config.ENFORCEMENT_PER_MINUTE)
 
 
 def set_client(client: JevClient) -> None:

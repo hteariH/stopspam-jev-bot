@@ -70,6 +70,10 @@ STRINGS: dict[str, dict[str, str]] = {
               "сообщений.\n\n"
               "Любой админ может отключить классификацию для чата через /chats.",
     },
+    "too_many_requests": {
+        "en": "Too many requests. Please try again in a minute.",
+        "ru": "Слишком много запросов. Попробуйте ещё раз через минуту.",
+    },
     "no_chats": {
         "en": "I am not in any group you administer yet. Add me to a group first.",
         "ru": "Я пока не состою ни в одной группе, где вы админ. Сначала добавьте "

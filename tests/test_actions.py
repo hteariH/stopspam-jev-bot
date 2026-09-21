@@ -1,14 +1,14 @@
-"""Tests for core.actions.EnforcementLimiter.
+"""Tests for core.ratelimit.RateLimiter.
 
-apply() itself is exercised end-to-end in tests/test_group_handler.py; this
-covers the limiter as the pure, injectable piece it is: no Telegram objects,
-no storage.
+core.actions.apply() itself is exercised end-to-end in
+tests/test_group_handler.py; this covers the limiter as the pure, injectable
+piece it is: no Telegram objects, no storage.
 """
-from core.actions import EnforcementLimiter
+from core.ratelimit import RateLimiter
 
 
 def test_refuses_once_the_per_minute_budget_is_spent():
-    limiter = EnforcementLimiter(per_minute=3)
+    limiter = RateLimiter(per_minute=3)
     chat_id = 1
     assert limiter.allow(chat_id) is True
     assert limiter.allow(chat_id) is True
@@ -17,7 +17,7 @@ def test_refuses_once_the_per_minute_budget_is_spent():
 
 
 def test_budget_is_tracked_per_chat_not_globally():
-    limiter = EnforcementLimiter(per_minute=1)
+    limiter = RateLimiter(per_minute=1)
     assert limiter.allow(1) is True
     assert limiter.allow(1) is False
     # A second chat has never enforced anything and must get its own budget -

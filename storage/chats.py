@@ -45,6 +45,35 @@ def _row_to_config(row: sqlite3.Row) -> ChatConfig:
     )
 
 
+def candidate_chat_ids(user_id: int, limit: int) -> list[int]:
+    """Chat ids this user plausibly belongs to, at most `limit` of them.
+
+    /chats is a public command: anybody who can DM the bot can run it, and
+    the chats table grows without bound as the bot is added to more groups.
+    Verifying admin rights against Telegram for every known chat would mean
+    one get_chat_member call per group per stranger, which walks straight
+    into Telegram's flood limits at a few hundred groups.
+
+    Two kinds of row already tie a user to a chat, and both are far smaller
+    than "every chat": the chat whose review cards go to this user (set when
+    they added the bot), and the trust ledger rows written for every message
+    they have posted. A user who is an admin of a group but has never posted
+    there and did not add the bot is not in this set - they need to post once,
+    or have a co-admin point the log chat at them.
+
+    The limit is a hard cap, not a page: it bounds the Telegram calls one
+    command can cause, which is the whole point.
+    """
+    rows = db.connect().execute(
+        """SELECT chat_id FROM chats WHERE log_chat_id = ?
+           UNION
+           SELECT chat_id FROM trust WHERE user_id = ?
+           LIMIT ?""",
+        (user_id, user_id, limit),
+    ).fetchall()
+    return [row["chat_id"] for row in rows]
+
+
 def get_chat(chat_id: int) -> ChatConfig | None:
     row = db.connect().execute(
         "SELECT * FROM chats WHERE chat_id = ?", (chat_id,)

@@ -31,10 +31,15 @@ def fresh(monkeypatch):
     import importlib
     import config
     importlib.reload(config)
-    from storage import chats, db
+    from storage import chats, db, trust
     db.reset()
     calls.clear()
     chats.ensure_chat(GROUP, "Python Chat")
+    # /chats only considers chats this user is plausibly in - a trust row (a
+    # message they posted) or a log chat pointed at them. An admin who has
+    # posted in their own group is the ordinary case; without this the menu
+    # tests would be testing an admin the bot has never seen anywhere.
+    trust.seen(GROUP, ADMIN)
     # Bot.__call__ is a single class attribute shared by every test module
     # that patches it. Re-asserting it here, per test, makes this module
     # immune to collection order and to any other module patching it.
@@ -198,3 +203,68 @@ async def test_group_title_with_markup_is_escaped_and_does_not_crash_chats():
     assert "<chat>" not in text
     assert "&lt;chat&gt;" in text
     assert "&amp;" in text
+
+
+def lookups():
+    return [c for c in calls if isinstance(c, GetChatMember)]
+
+
+async def test_a_stranger_costs_no_telegram_lookups():
+    """/chats is public: anyone who can DM the bot can run it. It must not
+    walk the whole chats table asking Telegram about a user who has no
+    connection to any of those chats.
+
+    Production edit this catches: restoring the old
+    `SELECT chat_id FROM chats` in _admin_chats, which asks Telegram about
+    every known chat for every caller.
+    """
+    from storage import chats
+    for i in range(5):
+        chats.ensure_chat(-200 - i, f"Group {i}")
+    await feed(dm("/chats", user_id=BYSTANDER))
+    assert lookups() == [], "no candidate chats means no Telegram calls at all"
+    assert sent() and "not in any group" in sent()[-1].text
+
+
+async def test_candidate_set_is_capped_however_many_chats_match():
+    """The cap is a hard bound on Telegram calls per command, not a page.
+
+    Production edit this catches: dropping the LIMIT from
+    chats.candidate_chat_ids, or raising MAX_MENU_CHATS above the number of
+    matching rows - both make this command issue one get_chat_member per
+    matching chat without bound.
+    """
+    from handlers import admin
+    from storage import chats, trust
+    extra = admin.MAX_MENU_CHATS + 10
+    for i in range(extra):
+        chats.ensure_chat(-300 - i, f"Group {i}")
+        trust.seen(-300 - i, ADMIN)
+    await feed(dm("/chats"))
+    assert len(lookups()) <= admin.MAX_MENU_CHATS
+
+
+async def test_repeated_chats_from_one_user_is_rate_limited():
+    """The spec asks for a simple per-user rate limit on this command.
+
+    Production edit this catches: removing the _chats_limiter check at the
+    top of on_chats, which lets one user spend the bot's Telegram budget as
+    fast as they can send the command.
+    """
+    from handlers import admin
+    for _ in range(admin.CHATS_PER_MINUTE):
+        await feed(dm("/chats"))
+    calls.clear()
+    await feed(dm("/chats"))
+    assert lookups() == [], "a refused command must not reach Telegram at all"
+    assert "Too many requests" in sent()[-1].text
+
+
+async def test_the_budget_is_per_user_not_global():
+    """One noisy stranger must not lock a real admin out of their own menu."""
+    from handlers import admin
+    for _ in range(admin.CHATS_PER_MINUTE + 1):
+        await feed(dm("/chats", user_id=BYSTANDER))
+    calls.clear()
+    await feed(dm("/chats"))
+    assert "Too many requests" not in sent()[-1].text

@@ -2,14 +2,13 @@
 import functools
 import json
 import logging
-import time
-from collections import defaultdict, deque
 
 from aiogram.exceptions import TelegramAPIError
 
 from core import guards
 from core.cards import card_keyboard, render_card
 from core.policy import Action
+from core.ratelimit import RateLimiter
 from storage import audit, reviews
 from texts import t
 
@@ -22,26 +21,7 @@ log = logging.getLogger("stopspam.actions")
 _best_effort = functools.partial(guards.best_effort, log)
 
 
-class EnforcementLimiter:
-    """Caps enforcement per chat per minute so a raid cannot turn the bot into
-    a flood source and get it banned."""
-
-    def __init__(self, per_minute: int) -> None:
-        self._per_minute = per_minute
-        self._events: dict[int, deque[float]] = defaultdict(deque)
-
-    def allow(self, chat_id: int) -> bool:
-        window = self._events[chat_id]
-        now = time.monotonic()
-        while window and now - window[0] > 60:
-            window.popleft()
-        if len(window) >= self._per_minute:
-            return False
-        window.append(now)
-        return True
-
-
-async def apply(bot, *, message, outcome, chat, limiter: EnforcementLimiter) -> str:
+async def apply(bot, *, message, outcome, chat, limiter: RateLimiter) -> str:
     decision, verdict = outcome.decision, outcome.verdict
     if decision is None or decision.action == Action.IGNORE:
         return "ignored"
