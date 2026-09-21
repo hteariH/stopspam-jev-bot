@@ -53,6 +53,7 @@ def test_trusted_member_posting_media_with_caption_is_rechecked():
     result = gate(status="trusted", clean_count=50,
                   facts=facts(media_type="photo", is_caption=True))
     assert result.check is True
+    assert result.reason == "trigger"
 
 
 def test_trusted_member_returning_after_long_silence_is_rechecked():
@@ -63,6 +64,36 @@ def test_trusted_member_returning_after_long_silence_is_rechecked():
 
 def test_plain_text_from_trusted_member_costs_no_api_call():
     assert gate(status="trusted", clean_count=50, days_since_seen=2.0).check is False
+
+
+def test_allowlisted_beats_trigger():
+    result = gate(status="allowlisted", facts=facts(link_count=1))
+    assert result.check is False
+    assert result.reason == "allowlisted"
+
+
+def test_flagged_with_no_trigger_is_still_checked():
+    result = gate(status="flagged", days_since_seen=1.0)
+    assert result.check is True
+    assert result.reason == "flagged"
+
+
+def test_low_history_from_clean_count_below_threshold():
+    result = gate(status="trusted", clean_count=2, trust_after=5)
+    assert result.check is True
+    assert result.reason == "low_history"
+
+
+def test_silence_boundary_at_exactly_thirty_days():
+    result = gate(status="trusted", clean_count=50, days_since_seen=30.0)
+    assert result.check is False
+    assert result.reason == "trusted"
+
+
+def test_silence_boundary_just_over_thirty_days():
+    result = gate(status="trusted", clean_count=50, days_since_seen=30.1)
+    assert result.check is True
+    assert result.reason == "returned_after_silence"
 
 
 def test_trigger_detection():
