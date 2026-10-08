@@ -16,10 +16,18 @@ export function makeBot(api) {
   return {
     api,
 
-    sendMessage(chatId, text, { replyMarkup } = {}) {
+    sendMessage(chatId, text, { replyMarkup, threadId } = {}) {
       const params = { chat_id: chatId, text, parse_mode: 'HTML' };
+      if (threadId) params.message_thread_id = threadId;
       if (replyMarkup) params.reply_markup = replyMarkup;
       return api.sendMessage(params);
+    },
+
+    // aiogram's Message.answer: a reply in the same chat, and in the same
+    // forum topic when the message came from one.
+    answer(message, text, { replyMarkup } = {}) {
+      const threadId = message.is_topic_message ? message.message_thread_id : undefined;
+      return this.sendMessage(message.chat.id, text, { replyMarkup, threadId });
     },
 
     editMessageText(chatId, messageId, text, { replyMarkup } = {}) {
