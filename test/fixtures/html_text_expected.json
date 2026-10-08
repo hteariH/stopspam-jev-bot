@@ -1,0 +1,15 @@
+[
+ "plain &lt;text&gt; &amp; more",
+ "<b>Possible spam</b>\nChat: G &amp; co\nRisk: 0.93",
+ "a😀b <b>bold <i>italic</i></b>",
+ "<code>code</code> here and <blockquote>quote</blockquote>",
+ "see https://x.com @user #tag",
+ "<a href=\"https://e.com/?a=1&b=2\">link</a> <a href=\"tg://user?id=42\">mention</a>",
+ "<pre><code language=\"language-python\">print(1)</code></pre>",
+ "<pre>x &lt;y&gt; z</pre>",
+ "<u>u</u> <s>s</s> <tg-spoiler>sp</tg-spoiler> <blockquote expandable>eq</blockquote>",
+ "<tg-emoji emoji-id=\"5368324170671202286\"><b>🎉 party</b></tg-emoji> party",
+ "Author: Ann (<code>555</code>)\n\n<blockquote>quote 😀😀 &lt;b</blockquote>&gt;",
+ "<i>caption</i> &lt;b&gt;",
+ "<b>outer <i><u>inner</u></i> end</b>"
+]

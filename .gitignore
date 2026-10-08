@@ -7,3 +7,5 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 data/
+node_modules/
+.tgcloud/

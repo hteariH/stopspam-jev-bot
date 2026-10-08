@@ -109,7 +109,7 @@ small set of questions about it (is it spam, is it a scam, does it try to
 move the conversation off-platform, does it read like an ordinary message
 from a member, what category it falls into, how severe it is) and returns,
 for each answer, a **calibrated confidence** alongside the answer itself.
-Those answers are combined into a single risk score in `core/policy.py`.
+Those answers are combined into a single risk score in `tgcloud/lib/core/policy.js`.
 
 Automatic deletion is gated on that calibrated confidence, not on the raw
 risk score. A message only gets deleted automatically when the risk score
@@ -120,7 +120,7 @@ review queue instead of being deleted — the bot would rather ask an admin
 than act on a guess it isn't confident in.
 
 The thresholds that drive this (`delete_threshold`, `review_threshold`,
-`confidence_floor` in `config.py`, adjustable per chat with `/chats`) are
+`confidence_floor` in `tgcloud/lib/config.js`, adjustable per chat with `/chats`) are
 currently set by judgment, not by measurement against a labelled dataset.
 There is no accuracy number to quote here yet — the review queue exists in
 part to build that evidence over time, and the thresholds should be revisited
@@ -151,11 +151,14 @@ from anyone an admin has marked as not spam, nor messages with neither text
 nor a caption (joins, pins, photos with no caption).
 
 Message text is stored in the review queue for at most 7 days and then
-erased automatically. Two things do that erasing, so it does not rest on one
-of them: storing new message text clears any expired text in the same call,
-and `bot.py` runs an hourly housekeeping pass for groups that have gone quiet
-and are writing nothing new. The human decision recorded against a message is
-kept, but not the text itself. The audit log the bot keeps for every evaluation never stores
+erased. The bot runs on Telegram Serverless, which has no timers, so the
+erasing happens on the way past: every update the bot handles — a message in
+any group, a button press, a payment — first clears expired text from every
+chat, and storing new text does the same. On a bot that sits in active groups
+that is far more often than the hourly pass it replaced; text would outlive
+its 7 days only if the bot received no update at all from anyone after they
+were up. The human decision recorded against a message is kept, but not the
+text itself. The audit log the bot keeps for every evaluation never stores
 message text at all.
 
 One thing the bot keeps forever: when someone pays for a group, it records
@@ -170,42 +173,76 @@ Any admin can turn classification off for their chat at any time with
 `/privacy` command tells an admin in Telegram — if the two ever disagree,
 that is a bug in one of them.
 
-## Self-hosting
+## How it runs
 
-The bot needs two secrets and refuses to start without both:
-
-```
-BOT_TOKEN=          # from @BotFather
-TYPESAFE_API_KEY=   # from TypeSafe
-DB_PATH=stopspam.db # optional, defaults to stopspam.db
-```
-
-Copy `.env.example` to `.env` and fill those in, then:
+The bot runs on [Telegram Serverless](https://core.telegram.org/bots/serverless):
+plain JavaScript modules in `tgcloud/`, executed by Telegram next to the Bot
+API, with a SQLite database the platform hosts. There is no server, container
+or webhook to manage.
 
 ```
-docker compose up
+tgcloud/
+  schema.js        the database tables
+  handlers/        one file per Telegram update type; all four route through lib/dispatch.js
+  endpoints/       ops_* one-off operations, run with `tgcloud run` (see below)
+  lib/             everything else: core/ (moderation), storage/, handlers/, texts.js
 ```
 
-This builds the image, runs the bot with `DB_PATH` pointed at a volume
-(`./data`), and restarts it unless you stop it. Message data lives entirely
-in that SQLite file on the volume; there is no other datastore.
+The modules may import only the platform SDK (`sdk`, `sdk/db`) and each
+other; there are no npm packages at runtime.
 
-A self-hosted instance bills to its own bot, so the tier limits above apply
-only to the public `@StopSpam_jev_bot`. To turn billing off entirely, set
-`FREE_MEMBER_LIMIT` to a number no group will reach.
+### Deploying
 
-To run it directly instead of in Docker, install `requirements.txt` into a
-Python 3.10+ environment and run `python bot.py` with the same `.env` in
-place.
+Pushing to `master` runs the tests and then `tgcloud push`, given a
+`TGCLOUD_TOKEN` repository secret (the project token from @BotFather →
+Bot → Serverless). By hand, from the project root:
+
+```
+npm ci
+npx tgcloud login     # once per machine
+npx tgcloud push
+```
+
+Always run `npm ci` first. The CLI is the pinned `@tgcloud/cli` dev
+dependency; without it installed, `npx tgcloud` would download the unrelated
+npm package that happens to be called `tgcloud`.
+
+Schema changes are never applied by a push. After changing
+`tgcloud/schema.js`, read what `npx tgcloud push` reports and apply it with
+`npx tgcloud migrate`.
+
+### Settings and one-off operations
+
+The platform has no environment variables. Thresholds, prices and limits are
+constants in `tgcloud/lib/config.js`. The TypeSafe API key lives in the
+database and is written once:
+
+```
+npx tgcloud run endpoints/ops_set_secret '{value: "YOUR_TYPESAFE_KEY"}' --ctx '{ops: true}'
+npx tgcloud run endpoints/ops_classify '{text: "buy crypto now"}' --ctx '{ops: true}'
+npx tgcloud run endpoints/ops_set_commands '{}' --ctx '{ops: true}'
+```
+
+Or, with no key in hand at all: run the **Set TypeSafe key** workflow in
+GitHub Actions, which copies the `TYPESAFE_API_KEY` repository secret into
+the platform and checks it, without printing it.
+
+The second line checks the key and the classifier from inside the platform;
+the third sets the bot's command menu. The `ops_*` endpoints refuse to run
+unless called through an authenticated `tgcloud run` with `{ops: true}`;
+called from a Mini App, they do nothing.
+
+Moving data from the old SQLite file: `node tools/migrate_from_sqlite.mjs
+stopspam.db` (add `--dry-run` to only count). It is safe to re-run.
 
 ## Running the tests
 
 ```
-./.venv/Scripts/python.exe -m pytest -v
+npm ci
+npm test
 ```
 
-(or, on a platform where the virtualenv's Python is on `PATH` under a
-different name, `python -m pytest -v` from inside the activated virtualenv).
-The tests do not require `TYPESAFE_API_KEY` to be a real key — a fake
-classifier client stands in for TypeSafe everywhere except the one module
-that talks to it.
+The tests run every module against stand-ins for the platform SDK (an
+in-memory `node:sqlite` database built from `tgcloud/schema.js`, a recording
+Bot API, a scripted `fetch`), so they need Node 22.13+ and no network, no bot
+token and no TypeSafe key.

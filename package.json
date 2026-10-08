@@ -1,0 +1,13 @@
+{
+  "name": "stopspam",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import ./test/fakes/register.mjs --test \"test/**/*.test.js\"",
+    "status": "tgcloud status",
+    "deploy": "tgcloud push"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "0.2.0"
+  }
+}

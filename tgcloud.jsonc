@@ -1,0 +1,4 @@
+// The bot has no Mini App: nothing is hosted, only tgcloud/ modules deploy.
+{
+  "static": false
+}

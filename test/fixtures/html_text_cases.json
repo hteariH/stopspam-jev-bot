@@ -1,0 +1,15 @@
+[
+  {"text": "plain <text> & more"},
+  {"text": "Possible spam\nChat: G & co\nRisk: 0.93", "entities": [{"type": "bold", "offset": 0, "length": 13}]},
+  {"text": "a😀b bold italic", "entities": [{"type": "bold", "offset": 5, "length": 11}, {"type": "italic", "offset": 10, "length": 6}]},
+  {"text": "code here and quote", "entities": [{"type": "code", "offset": 0, "length": 4}, {"type": "blockquote", "offset": 14, "length": 5}]},
+  {"text": "see https://x.com @user #tag", "entities": [{"type": "url", "offset": 4, "length": 13}, {"type": "mention", "offset": 18, "length": 5}, {"type": "hashtag", "offset": 24, "length": 4}]},
+  {"text": "link mention", "entities": [{"type": "text_link", "offset": 0, "length": 4, "url": "https://e.com/?a=1&b=2"}, {"type": "text_mention", "offset": 5, "length": 7, "user": {"id": 42, "is_bot": false, "first_name": "A"}}]},
+  {"text": "print(1)", "entities": [{"type": "pre", "offset": 0, "length": 8, "language": "python"}]},
+  {"text": "x <y> z", "entities": [{"type": "pre", "offset": 0, "length": 7}]},
+  {"text": "u s sp eq", "entities": [{"type": "underline", "offset": 0, "length": 1}, {"type": "strikethrough", "offset": 2, "length": 1}, {"type": "spoiler", "offset": 4, "length": 2}, {"type": "expandable_blockquote", "offset": 7, "length": 2}]},
+  {"text": "🎉 party", "entities": [{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "5368324170671202286"}, {"type": "bold", "offset": 0, "length": 8}]},
+  {"text": "Author: Ann (555)\n\nquote 😀😀 <b>", "entities": [{"type": "code", "offset": 13, "length": 3}, {"type": "blockquote", "offset": 19, "length": 13}]},
+  {"caption": "caption <b>", "caption_entities": [{"type": "italic", "offset": 0, "length": 7}]},
+  {"text": "outer inner end", "entities": [{"type": "bold", "offset": 0, "length": 15}, {"type": "italic", "offset": 6, "length": 5}, {"type": "underline", "offset": 6, "length": 5}]}
+]

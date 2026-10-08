@@ -1,16 +1,25 @@
 name: Set TypeSafe key
 
-# Run by hand (Actions -> Set TypeSafe key -> Run workflow) once the bot's
-# Serverless project exists and TGCLOUD_TOKEN is set. Copies the
-# TYPESAFE_API_KEY repository secret - the key the VPS bot used - into the
-# platform's database and checks one classifier call works. The key is never
-# printed.
+# Run by hand (Actions -> Set TypeSafe key -> Run workflow, on the branch to
+# deploy from). Prepares the Serverless project without taking over the bot:
+#
+#   1. shows the webhook, to see whether anything owns the bot's updates yet;
+#   2. pushes schema.js, lib/ and endpoints/ only - no handlers, so the
+#      platform sets no webhook and a long-polling bot elsewhere keeps working;
+#   3. creates the tables (`migrate --safe`: additions only, nothing dropped
+#      or retyped);
+#   4. copies the TYPESAFE_API_KEY repository secret - the key the VPS bot
+#      used - into the platform's database and checks one classifier call.
+#
+# The key is never printed.
 on:
   workflow_dispatch:
 
 jobs:
   set-key:
     runs-on: ubuntu-latest
+    env:
+      TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
     steps:
       - uses: actions/checkout@v5
 
@@ -19,16 +28,31 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Store the key and check it
-        env:
-          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+      - name: Check the token
         run: |
           if [ -z "$TGCLOUD_TOKEN" ]; then
             echo "TGCLOUD_TOKEN is not set: add the Serverless project token as a repository secret first" >&2
             exit 1
           fi
-          node tools/set_typesafe_key.mjs
+
+      # npm ci installs the pinned @tgcloud/cli; never npx tgcloud without it.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Webhook before
+        run: npx --no-install tgcloud webhook || true
+
+      - name: Push schema, lib and endpoints (no handlers)
+        run: npx --no-install tgcloud push --force tgcloud/schema.js tgcloud/lib tgcloud/endpoints
+
+      - name: Create the tables
+        run: npx --no-install tgcloud migrate --safe
+
+      - name: Store the key and check it
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: node tools/set_typesafe_key.mjs
+
+      - name: Webhook after
+        if: always()
+        run: npx --no-install tgcloud webhook || true
