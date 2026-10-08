@@ -129,7 +129,7 @@ export function ddl(schemaModule) {
 let database = null;
 // Tests can make the next N statements fail, standing in for a locked
 // database or a full disk.
-const failures = { remaining: 0, match: null };
+const failures = { remaining: 0, match: null, make: null };
 
 export class FakeDbError extends Error {}
 
@@ -142,7 +142,8 @@ function prepare(query, params) {
   const { text: q, params: p } = compile(query, params);
   if (failures.remaining > 0 && (!failures.match || failures.match.test(q))) {
     failures.remaining -= 1;
-    throw new FakeDbError(`simulated storage failure: ${q.slice(0, 60)}`);
+    const message = `simulated storage failure: ${q.slice(0, 60)}`;
+    throw failures.make ? failures.make(message) : new FakeDbError(message);
   }
   return { stmt: conn().prepare(q), params: normalizeParams(p) };
 }
@@ -178,11 +179,16 @@ export function resetDb(schemaModule) {
   for (const s of ddl(schemaModule)) database.exec(s);
   failures.remaining = 0;
   failures.match = null;
+  failures.make = null;
 }
 
-export function failNext(count = 1, match = null) {
+// Makes the next `count` statements matching `match` (a RegExp over the
+// compiled SQL, or null for any) throw; `make` builds the error, a
+// FakeDbError standing in for a storage failure by default.
+export function failNext(count = 1, match = null, make = null) {
   failures.remaining = count;
   failures.match = match;
+  failures.make = make;
 }
 
 export function rawDb() {
