@@ -223,6 +223,10 @@ npx tgcloud run endpoints/ops_classify '{text: "buy crypto now"}' --ctx '{ops: t
 npx tgcloud run endpoints/ops_set_commands '{}' --ctx '{ops: true}'
 ```
 
+Or, with no key in hand at all: run the **Set TypeSafe key** workflow in
+GitHub Actions, which copies the `TYPESAFE_API_KEY` repository secret into
+the platform and checks it, without printing it.
+
 The second line checks the key and the classifier from inside the platform;
 the third sets the bot's command menu. The `ops_*` endpoints refuse to run
 unless called through an authenticated `tgcloud run` with `{ops: true}`;

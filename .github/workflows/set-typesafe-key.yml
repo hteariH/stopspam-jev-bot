@@ -1,0 +1,34 @@
+name: Set TypeSafe key
+
+# Run by hand (Actions -> Set TypeSafe key -> Run workflow) once the bot's
+# Serverless project exists and TGCLOUD_TOKEN is set. Copies the
+# TYPESAFE_API_KEY repository secret - the key the VPS bot used - into the
+# platform's database and checks one classifier call works. The key is never
+# printed.
+on:
+  workflow_dispatch:
+
+jobs:
+  set-key:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Store the key and check it
+        env:
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          if [ -z "$TGCLOUD_TOKEN" ]; then
+            echo "TGCLOUD_TOKEN is not set: add the Serverless project token as a repository secret first" >&2
+            exit 1
+          fi
+          node tools/set_typesafe_key.mjs
