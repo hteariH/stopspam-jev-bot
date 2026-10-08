@@ -13,134 +13,62 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-node@v5
         with:
-          python-version: "3.13"
-          cache: pip
+          # node:sqlite (the test database) needs 22.13 or newer.
+          node-version: "24"
+          cache: npm
 
+      # npm ci installs the pinned @tgcloud/cli. Never call `npx tgcloud`
+      # without it: the unscoped npm package "tgcloud" is unrelated
+      # third-party code that npx would fetch instead.
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: npm ci
 
       - name: Run tests
-        run: python -m pytest -q
-
-      - name: Create a throwaway .env for the image build
-        # docker-compose.yml declares env_file: .env, so docker compose
-        # refuses to even parse the config without one. These values are
-        # never used for anything but the import check below.
-        run: |
-          echo "BOT_TOKEN=ci-build-placeholder" > .env
-          echo "TYPESAFE_API_KEY=ci-build-placeholder" >> .env
-
-      - name: Build the image
-        run: docker compose build
-
-      - name: Verify the image can import the bot
-        # bot.py's main() exits without a real TYPESAFE_API_KEY, so this
-        # imports the module instead of running it - it still fails loudly
-        # on a missing package directory (core/handlers/storage), which is
-        # the failure mode a partial COPY list would otherwise hide until
-        # the deploy's running-container check, after a push and an scp.
-        run: docker compose run --rm --entrypoint python bot -c "import bot"
+        run: npm test
 
   deploy:
-    name: Deploy to VPS
+    name: Deploy to Telegram Serverless
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      # Until the secrets are set, the deploy reports itself skipped instead of failing.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      # Until the token is set, the deploy reports itself skipped instead of failing.
       - name: Check secrets
         id: secrets
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
         run: |
-          missing=""
-          for name in VPS_HOST SSH_USERNAME BOT_TOKEN TYPESAFE_API_KEY; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          # Either credential works; appleboy's actions prefer the key when both are set.
-          if [ -z "$SSH_PRIVATE_KEY" ] && [ -z "$SSH_PASSWORD" ]; then
-            missing="$missing SSH_PRIVATE_KEY-or-SSH_PASSWORD"
-          fi
-          if [ -n "$missing" ]; then
+          if [ -z "$TGCLOUD_TOKEN" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "### Deploy skipped — missing secrets:$missing" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Deploy skipped — missing secret: TGCLOUD_TOKEN" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Copy sources to the server
+      - name: Install dependencies
         if: steps.secrets.outputs.ready == 'true'
-        uses: appleboy/scp-action@v1.0.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: "*.py,requirements.txt,Dockerfile,docker-compose.yml,core,handlers,storage"
-          target: ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
-          overwrite: true
+        run: npm ci
 
-      - name: Rebuild and restart the container
+      # Pushes code only. Database schema changes are never applied from CI:
+      # `npx tgcloud migrate` is run by hand, after reading what it will do.
+      # --force because CI is the source of truth for what is deployed.
+      - name: Push modules
         if: steps.secrets.outputs.ready == 'true'
-        uses: appleboy/ssh-action@v1.2.0
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          SUDO_PASSWORD: ${{ secrets.SUDO_PASSWORD || secrets.SSH_PASSWORD }}
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          envs: BOT_TOKEN,TYPESAFE_API_KEY,SUDO_PASSWORD
-          script_stop: true
-          script: |
-            cd ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
-            umask 077
-            cat > .env <<ENVFILE
-            BOT_TOKEN=$BOT_TOKEN
-            TYPESAFE_API_KEY=$TYPESAFE_API_KEY
-            DB_PATH=/data/stopspam.db
-            ENVFILE
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+        run: npx --no-install tgcloud push --force
 
-            # Reaching the docker daemon, cheapest route first. With key-based
-            # login there is no password to feed sudo, so passwordless sudo is
-            # tried before the optional SUDO_PASSWORD secret.
-            if docker info >/dev/null 2>&1; then
-              DOCKER="docker"
-            elif sudo -n docker info >/dev/null 2>&1; then
-              DOCKER="sudo -n docker"
-              echo "note: docker needs sudo here; add the user to the docker group to skip it"
-            elif [ -n "$SUDO_PASSWORD" ] && echo "$SUDO_PASSWORD" | sudo -S -p '' -v >/dev/null 2>&1; then
-              DOCKER="sudo docker"
-              echo "note: docker needs sudo with a password; add the user to the docker group to skip it"
-            else
-              echo "no access to the docker daemon: add $USER to the docker group, grant passwordless sudo, or set the SUDO_PASSWORD secret" >&2
-              exit 1
-            fi
-
-            $DOCKER compose up -d --build
-            $DOCKER image prune -f
-
-            # Give the bot time to reach Telegram, then prove it is actually up.
-            sleep 15
-            $DOCKER compose ps
-            echo "----- bot log -----"
-            $DOCKER compose logs --tail 30 2>&1 || true
-            echo "-------------------"
-
-            if [ -z "$($DOCKER compose ps -q --status running)" ]; then
-              echo "the bot container is not running after deploy" >&2
-              exit 1
-            fi
+      - name: Check the webhook
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+        run: npx --no-install tgcloud webhook

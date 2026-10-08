@@ -413,15 +413,6 @@ test('notices are evaluated once per cache window, not per message', async () =>
     'a second message inside the same cache window evaluated the notice again');
 });
 
-// --- the housekeeping that replaced the background loop ---
-
-test('a group message erases review text that has expired, even with nothing new to review', async () => {
-  exec(`INSERT INTO reviews (chat_id, message_id, user_id, text, verdict_json, risk, created_at, expires_at)
-        VALUES (-1, 1, 1, 'old spam', '{}', 0.9, '2020-01-01T00:00:00+00:00', '2020-01-08T00:00:00+00:00')`);
-  await feed(groupMessage('morning all'), new FakeJevClient({}, { fallback: CHATTER }));
-  assert.equal(rows('SELECT text FROM reviews')[0].text, null);
-});
-
 test('a reply in a forum topic stays in that topic', async () => {
   await chats.ensureChat(MODCHAT, 'Mod Room');
   world.plainMembers.add(`${MODCHAT}:${ADMIN}`);

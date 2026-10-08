@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fresh, respond, row, exec } from './helpers.js';
+import { fresh, respond, row, rows, exec } from './helpers.js';
 import { calls } from './telegram.js';
 import { FakeJevClient } from './fakes/jev.js';
 import onMessage from '../tgcloud/handlers/message.js';
@@ -172,3 +172,20 @@ test('an exception inside a handler does not escape to the platform', async () =
   await activeGroup(150);
   await post('buy crypto now', SPAMMER, 1);
 });
+
+// The platform has no timers: expired review text is erased on the way past
+// every update the bot receives, whatever its kind and wherever it is from.
+for (const [kind, deliver] of [
+  ['a message in another group', () => onMessage({ ...groupMessage('morning', REGULAR, 1), chat: { id: -1009, type: 'supergroup', title: 'Other' } }, { update: { update_id: 1 } })],
+  ['a button press', () => onCallbackQuery({ id: 'q', from: { id: ADMIN }, chat_instance: 'ci', data: 'cfg:x' }, { update: { update_id: 2 } })],
+  ['a private message', () => onMessage({ message_id: 1, date: 1, chat: { id: ADMIN, type: 'private' }, from: { id: ADMIN }, text: 'hi' }, { update: { update_id: 3 } })],
+]) {
+  test(`${kind} erases review text that has expired`, async () => {
+    exec(`INSERT INTO reviews (chat_id, message_id, user_id, text, verdict_json, risk, created_at, expires_at)
+          VALUES (-1, 1, 1, 'old spam', '{}', 0.9, '2020-01-01T00:00:00+00:00', '2020-01-08T00:00:00+00:00')`);
+    exec(`INSERT INTO reviews (chat_id, message_id, user_id, text, verdict_json, risk, created_at, expires_at)
+          VALUES (-1, 2, 1, 'recent', '{}', 0.9, '2999-01-01T00:00:00+00:00', '2999-01-08T00:00:00+00:00')`);
+    await deliver();
+    assert.deepEqual(rows('SELECT text FROM reviews ORDER BY message_id').map((r) => r.text), [null, 'recent']);
+  });
+}

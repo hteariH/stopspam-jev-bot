@@ -10,7 +10,6 @@ import { TypeSafeJevClient } from '../core/jev.js';
 import { RateLimiter } from '../core/ratelimit.js';
 import * as billing from '../storage/billing.js';
 import * as chats from '../storage/chats.js';
-import * as reviews from '../storage/reviews.js';
 import * as trust from '../storage/trust.js';
 import { now } from '../clock.js';
 import { logger } from '../log.js';
@@ -198,11 +197,6 @@ export async function onGroupMessage(bot, message) {
   // two getChatMember calls on every join is most of the spend in a group
   // with normal churn.
   if (!(message.text || message.caption)) return;
-
-  // There is no background loop on the platform: expired review text is
-  // erased on the way past every group message instead, which is what keeps
-  // the 7-day erasure true for groups that never produce a new review.
-  await guards.bestEffort(log, 'purge_expired', message.chat.id, reviews.purgeExpired);
 
   let chat;
   let row;

@@ -16,6 +16,8 @@ import * as admin from './handlers/admin.js';
 import * as group from './handlers/group.js';
 import * as payments from './handlers/payments.js';
 import * as review from './handlers/review.js';
+import { bestEffort } from './core/guards.js';
+import * as reviews from './storage/reviews.js';
 import { logger } from './log.js';
 
 const log = logger('stopspam.dispatch');
@@ -76,15 +78,25 @@ export async function dispatchMyChatMember(update, bot = makeBot(api)) {
   return group.onBotMembershipChanged(bot, update);
 }
 
-// Runs one platform handler. An exception is logged and swallowed, as
-// aiogram's polling loop did: the update is acknowledged either way, so a
-// bug can never make Telegram redeliver an update and repeat what already
-// happened (a deletion, a card, a credited payment).
+// Runs one platform handler.
+//
+// First it erases review text past its 7-day limit, across every chat. The
+// Python bot had an hourly loop for this; the platform has no timers, so the
+// erasure rides on every update the bot receives instead - from any group,
+// any button, any payment - which on a bot in active groups is far more
+// often than hourly. It is one UPDATE over an index on expires_at.
+//
+// An exception is then logged and swallowed, as aiogram's polling loop did:
+// the update is acknowledged either way, so a bug can never make Telegram
+// redeliver an update and repeat what already happened (a deletion, a card,
+// a credited payment).
 export async function guarded(kind, ctx, run) {
+  const updateId = ctx && ctx.update ? ctx.update.update_id : '?';
   try {
+    const cleared = await bestEffort(log, 'purge_expired', updateId, reviews.purgeExpired);
+    if (cleared) log.info('purged text from %s expired reviews', cleared);
     await run();
   } catch (exc) {
-    const updateId = ctx && ctx.update ? ctx.update.update_id : '?';
     log.error('unhandled error in %s update %s: %s', kind, updateId, exc);
     console.error(exc);
   }

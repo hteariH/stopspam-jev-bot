@@ -50,6 +50,9 @@ export const reviews = table('reviews', {
   expires_at: text('expires_at').notNull(),
 }, (t) => ({
   byChat: index('idx_reviews_chat').on(t.chat_id, t.decided_at),
+  // The 7-day erasure runs on every update (lib/dispatch.js), so finding
+  // the expired rows must not scan the table.
+  byExpiry: index('idx_reviews_expires').on(t.expires_at),
 }));
 
 export const audit = table('audit', {
