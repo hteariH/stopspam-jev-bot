@@ -14,7 +14,7 @@ the VPS deploy are deleted once the cutover is done.
 | Question | Decision |
 |---|---|
 | Old implementation | Replaced outright (no parallel run). Data is carried over. |
-| TypeSafe API key | Stored in a `secrets` table, written once with `tgcloud run lib/ops/set_secret.js`. Never in git, never in module code. |
+| TypeSafe API key | Stored in a `settings` table, written once with `tgcloud run endpoints/ops_set_secret`. Never in git, never in module code. |
 | Staging | None. Cutover goes straight to the production bot; safety comes from the ported test suite, `tgcloud run` smoke checks and a rehearsed rollback. |
 | Code shape | Straight port: same modules, same function names, same logic, so the diff can be read side by side with the Python. |
 
@@ -46,7 +46,7 @@ From the docs and from the `@tgcloud/cli@0.2.0` package's bundled SDK reference:
 package.json              devDependency @tgcloud/cli (pinned), scripts: test, deploy
 tgcloud.jsonc             {"static": false}
 tgcloud/
-  schema.js               chats, trust, reviews, audit, billing, payments, secrets, rate_events
+  schema.js               chats, trust, reviews, audit, billing, payments, settings, rate_events
   handlers/
     message.js            successful_payment -> payments; private -> admin; group -> setlog / pipeline
     callback_query.js     "cfg:" -> admin, "rv:" -> review
@@ -59,10 +59,16 @@ tgcloud/
     core/*.js             one file per core/*.py
     handlers/*.js         one file per handlers/*.py (admin, group, payments, review)
     storage/*.js          one file per storage/*.py, raw SQL kept as is
-    ops/set_secret.js     write a secret
-    ops/import.js         accept a batch of rows during data migration
-    ops/set_commands.js   setMyCommands (was done at process start)
-tools/migrate_from_sqlite.mjs  reads the VPS stopspam.db with node:sqlite, sends batches to ops/import
+    bot.js                aiogram-shaped adapter over `api` (parse_mode HTML default, cached getMe)
+    html_text.js          message text + entities -> HTML (aiogram's Message.html_text)
+    ops.js                guard shared by the ops endpoints
+  endpoints/
+    ops_set_secret.js     write a setting (TypeSafe key)
+    ops_import.js         accept a batch of rows during data migration
+    ops_counts.js         row counts per table, to verify the migration
+    ops_set_commands.js   setMyCommands (was done at process start)
+    ops_classify.js       one TypeSafe call from inside the platform (smoke test)
+tools/migrate_from_sqlite.mjs  reads the VPS stopspam.db with node:sqlite, sends batches to ops_import
 test/                     node:test; `sdk` replaced by fakes through a module-resolve hook
 ```
 
@@ -93,9 +99,24 @@ review, group).
    Timeout via `AbortController` if the SDK's `fetch` honours `signal`;
    checked with `tgcloud run` before cutover.
 5. **Missing key** -> `JevError("TYPESAFE_API_KEY is not set")`, never a crash.
-6. **Startup work** (`set_my_commands`) moves to `lib/ops/set_commands.js`, run
+6. **Startup work** (`set_my_commands`) moves to `endpoints/ops_set_commands`, run
    once after deploy.
 7. **Telegram ids** fit in 52 bits, so plain JS numbers are safe.
+
+8. **Ops modules are endpoints.** `tgcloud run` only runs modules in
+   `handlers/` and `endpoints/`, so one-off operations are endpoints. Over HTTP
+   an endpoint only runs with platform-verified Mini App init data, so every
+   ops endpoint refuses when `ctx.initData` is present and requires
+   `ctx.ops === true`, which only an authenticated `tgcloud run --ctx` can set.
+   The bot has no Mini App (`"static": false`).
+9. **Unhandled errors.** Each platform handler wraps its dispatch in a
+   try/catch that logs and returns, as aiogram's polling loop did, so a bug
+   never makes Telegram redeliver an update and repeat side effects.
+10. **`query.message.html_text`** (used when a review card is edited) is
+   rebuilt from text + entities in `lib/html_text.js`, offsets in UTF-16 as
+   Telegram sends them.
+11. **Bot identity** (`getMe`, needed for "can I delete here" and for
+   `/cmd@BotName` matching) is cached in module scope and in `settings`.
 
 Everything else — policy, tiers, gate, guards, notices, cards, offer, texts,
 billing, payments idempotency by charge id — is ported line for line.
@@ -125,17 +146,17 @@ Handlers are what make the platform take the webhook, so they go up last,
 after the data is in place:
 
 1. `npm ci`; `npx tgcloud login`.
-2. Targeted push of `schema.js` and `lib/` only (no handlers -> no webhook yet);
+2. Targeted push of `schema.js`, `lib/` and `endpoints/` (no handlers -> no webhook yet);
    `npx tgcloud migrate`.
-3. `tgcloud run lib/ops/set_secret.js` with the TypeSafe key; a `tgcloud run`
-   of `lib/core/jev.js` against a sample message proves fetch, the key and the
+3. `tgcloud run endpoints/ops_set_secret` with the TypeSafe key; a `tgcloud run`
+   of `endpoints/ops_classify` against a sample message proves fetch, the key and the
    timeout work from inside the platform.
 4. Stop the VPS container. Copy `stopspam.db` locally.
 5. `node tools/migrate_from_sqlite.mjs stopspam.db` (chunked, idempotent:
    inserts use `ON CONFLICT DO NOTHING`, so a rerun after a failure is safe;
    row counts are compared at the end).
 6. Full `npx tgcloud push` (handlers -> webhook set);
-   `tgcloud run lib/ops/set_commands.js`. Updates that arrived during steps 4-6
+   `tgcloud run endpoints/ops_set_commands`. Updates that arrived during steps 4-6
    were queued by Telegram (kept up to 24 h) and are delivered now.
 7. Smoke: `tgcloud webhook` shows no error; `/help` in private; a test message
    in a group the owner controls lands as an audit row.
