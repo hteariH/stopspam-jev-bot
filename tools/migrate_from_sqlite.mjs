@@ -60,7 +60,7 @@ export function plainRows(db, table) {
 // A function that runs one module on the platform, through @tgcloud/cli's
 // own run API, and returns what it returned. Args are never printed.
 export async function cli() {
-  const base = pathToFileURL(resolve('node_modules/@tgcloud/cli/src/')).href;
+  const base = `${pathToFileURL(resolve('node_modules/@tgcloud/cli/src')).href}/`;
   const [{ runFunction }, { scanFiles }, { pathToModule }, { readWd }, { resolveToken }] = await Promise.all([
     import(`${base}api/endpoints.js`),
     import(`${base}core/scanner.js`),
