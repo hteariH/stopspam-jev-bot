@@ -43,7 +43,7 @@ jobs:
         run: npx --no-install tgcloud webhook || true
 
       - name: Push schema, lib and endpoints (no handlers)
-        run: npx --no-install tgcloud push tgcloud/schema.js tgcloud/lib tgcloud/endpoints
+        run: npx --no-install tgcloud push --force tgcloud/schema.js tgcloud/lib tgcloud/endpoints
 
       - name: Create the tables
         run: npx --no-install tgcloud migrate --safe
