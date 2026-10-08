@@ -1,0 +1,83 @@
+name: Cut over to Serverless
+
+# Run by hand, once, after the VPS bot has been stopped
+# (`docker compose stop` in ~/stopspam-bot). Copies its database into the
+# Serverless project and deploys everything, handlers included - the push
+# that makes the platform take the bot's webhook. Updates Telegram queued
+# while nothing was serving them are delivered then.
+#
+# Rollback: run endpoints/ops_delete_webhook and `docker compose start` on
+# the VPS. The VPS database is only read here, never changed.
+on:
+  workflow_dispatch:
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    env:
+      TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+      SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      SSH_PORT: ${{ secrets.SSH_PORT || 22 }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '~/stopspam-bot' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Check secrets
+        run: |
+          for name in TGCLOUD_TOKEN VPS_HOST SSH_USERNAME SSH_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "missing secret: $name" >&2; exit 1; fi
+          done
+          sudo apt-get install -y -qq sshpass > /dev/null
+
+      # Two bots answering the same updates would double every deletion and
+      # card, so nothing happens unless the VPS bot is already down.
+      - name: Refuse while the VPS bot is running
+        run: |
+          running=$(sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$SSH_PORT" "$SSH_USERNAME@$VPS_HOST" \
+            "cd $DEPLOY_PATH && (docker compose ps -q --status running 2>/dev/null || sudo -n docker compose ps -q --status running)")
+          if [ -n "$running" ]; then
+            echo "the VPS bot is still running: stop it with 'docker compose stop' first" >&2
+            exit 1
+          fi
+        env:
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+
+      - name: Copy the VPS database
+        run: |
+          sshpass -e scp -o StrictHostKeyChecking=accept-new -P "$SSH_PORT" \
+            "$SSH_USERNAME@$VPS_HOST:$DEPLOY_PATH/data/stopspam.db" "$RUNNER_TEMP/stopspam.db"
+          ls -l "$RUNNER_TEMP/stopspam.db"
+        env:
+          SSHPASS: ${{ secrets.SSH_PASSWORD }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Make sure the schema is in place
+        run: |
+          npx --no-install tgcloud push --force tgcloud/schema.js tgcloud/lib tgcloud/endpoints
+          npx --no-install tgcloud migrate --safe
+
+      - name: Import the data
+        run: node tools/migrate_from_sqlite.mjs "$RUNNER_TEMP/stopspam.db"
+
+      - name: Deploy everything (sets the webhook)
+        run: npx --no-install tgcloud push --force
+
+      - name: Set the command menu
+        run: npx --no-install tgcloud run endpoints/ops_set_commands '{}' --ctx '{ops: true}'
+
+      - name: Webhook
+        if: always()
+        run: npx --no-install tgcloud webhook || true
+
+      - name: Remove the database copy
+        if: always()
+        run: rm -f "$RUNNER_TEMP/stopspam.db"
