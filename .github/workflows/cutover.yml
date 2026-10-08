@@ -72,7 +72,8 @@ jobs:
         run: npx --no-install tgcloud push --force
 
       - name: Set the command menu
-        run: npx --no-install tgcloud run endpoints/ops_set_commands '{}' --ctx '{ops: true}'
+        run: |
+          npx --no-install tgcloud run endpoints/ops_set_commands '{}' --ctx '{ops: true}'
 
       - name: Webhook
         if: always()
