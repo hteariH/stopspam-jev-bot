@@ -13,6 +13,7 @@ import counts from '../tgcloud/endpoints/ops_counts.js';
 import setCommands from '../tgcloud/endpoints/ops_set_commands.js';
 import classify from '../tgcloud/endpoints/ops_classify.js';
 import deleteWebhook from '../tgcloud/endpoints/ops_delete_webhook.js';
+import status from '../tgcloud/endpoints/ops_status.js';
 import * as settings from '../tgcloud/lib/storage/settings.js';
 import * as reviews from '../tgcloud/lib/storage/reviews.js';
 import { batches, plainRows, TABLES } from '../tools/migrate_from_sqlite.mjs';
@@ -20,7 +21,7 @@ import { batches, plainRows, TABLES } from '../tools/migrate_from_sqlite.mjs';
 beforeEach(fresh);
 
 const OPS = { ops: true };
-const ENDPOINTS = [setSecret, importRows, counts, setCommands, classify, deleteWebhook];
+const ENDPOINTS = [setSecret, importRows, counts, setCommands, classify, deleteWebhook, status];
 
 // Over HTTP an endpoint only runs with verified Mini App init data; none of
 // these may run that way, or without the explicit flag only the CLI sets.
@@ -135,4 +136,16 @@ test('batches respect both the byte and the row cap', () => {
 test('the rollback endpoint deletes the webhook without dropping pending updates', async () => {
   await deleteWebhook({}, OPS);
   assert.deepEqual(calls('deleteWebhook'), [{ drop_pending_updates: false }]);
+});
+
+test('ops_status reports counts, the latest audit rows and each chat', async () => {
+  const { exec } = await import('./helpers.js');
+  exec("INSERT INTO chats (chat_id, title, created_at, log_chat_id) VALUES (-1, 'G', 'x', 7)");
+  exec("INSERT INTO trust (chat_id, user_id, last_seen_at) VALUES (-1, 5, '2026-10-09T00:00:00+00:00')");
+  exec("INSERT INTO audit (chat_id, user_id, action, reason, created_at) VALUES (-1, 5, 'ignore', 'below_threshold', 'y')");
+  const result = await status({}, OPS);
+  assert.equal(result.counts.audit, 1);
+  assert.equal(result.audit[0].reason, 'below_threshold');
+  assert.deepEqual(result.chats, [{ chat_id: -1, mode: 'observe', lang: 'en', has_destination: 1,
+    last_message_at: '2026-10-09T00:00:00+00:00' }]);
 });

@@ -1,0 +1,29 @@
+name: Platform status
+
+# Run by hand to see what the bot on Telegram Serverless has been doing:
+# the webhook (with its last delivery error, if any) and endpoints/ops_status.
+on:
+  workflow_dispatch:
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    env:
+      TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Webhook
+        run: npx --no-install tgcloud webhook
+
+      - name: Status
+        run: |
+          npx --no-install tgcloud run endpoints/ops_status '{limit: 15}' --ctx '{ops: true}'
