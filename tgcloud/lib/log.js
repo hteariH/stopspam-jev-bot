@@ -12,11 +12,29 @@ function format(message, args) {
   });
 }
 
+// Tests only: when set, records go here instead of the console.
+let captured = null;
+
+export function _capture(sink) {
+  captured = sink;
+}
+
+function emit(name, level, message, args) {
+  const text = format(message, args);
+  if (captured) {
+    captured.push({ name, level, message: text });
+    return;
+  }
+  const line = `[${name}] ${text}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warning') console.warn(line);
+  else console.info(line);
+}
+
 export function logger(name) {
-  const prefix = `[${name}]`;
   return {
-    info: (message, ...args) => console.info(prefix, format(message, args)),
-    warning: (message, ...args) => console.warn(prefix, format(message, args)),
-    error: (message, ...args) => console.error(prefix, format(message, args)),
+    info: (message, ...args) => emit(name, 'info', message, args),
+    warning: (message, ...args) => emit(name, 'warning', message, args),
+    error: (message, ...args) => emit(name, 'error', message, args),
   };
 }

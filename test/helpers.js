@@ -5,14 +5,24 @@ import { resetDb, rawDb, failNext } from './fakes/sdk-db.js';
 import { resetSdk, api, respond, scriptFetch, fetchCalls, response, BotApiError } from './fakes/sdk.js';
 import { _setNow } from '../tgcloud/lib/clock.js';
 import { _resetBotCache } from '../tgcloud/lib/bot.js';
+import { _capture } from '../tgcloud/lib/log.js';
 
 export { rawDb, failNext, api, respond, scriptFetch, fetchCalls, response, BotApiError };
+
+// Every log record of the current test, newest last.
+export const logs = [];
 
 export function fresh() {
   resetDb(schema);
   resetSdk();
   _setNow(null);
   _resetBotCache();
+  logs.length = 0;
+  _capture(logs);
+}
+
+export function logLines(name = null) {
+  return logs.filter((r) => name === null || r.name === name).map((r) => r.message);
 }
 
 // Rows straight from the test database, bypassing the code under test.
