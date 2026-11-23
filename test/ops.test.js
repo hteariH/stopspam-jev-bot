@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { fresh, rows, scriptFetch, response } from './helpers.js';
 import { calls } from './telegram.js';
+import { respond } from './fakes/sdk.js';
 import setSecret from '../tgcloud/endpoints/ops_set_secret.js';
 import importRows, { COLUMNS } from '../tgcloud/endpoints/ops_import.js';
 import counts from '../tgcloud/endpoints/ops_counts.js';
@@ -143,9 +144,11 @@ test('ops_status reports counts, the latest audit rows and each chat', async () 
   exec("INSERT INTO chats (chat_id, title, created_at, log_chat_id) VALUES (-1, 'G', 'x', 7)");
   exec("INSERT INTO trust (chat_id, user_id, last_seen_at) VALUES (-1, 5, '2026-10-09T00:00:00+00:00')");
   exec("INSERT INTO audit (chat_id, user_id, action, reason, created_at) VALUES (-1, 5, 'ignore', 'below_threshold', 'y')");
+  respond('getChat', (p) => ({ id: p.chat_id, type: 'supergroup', title: 'G now' }));
+  respond('getChatMember', { status: 'administrator' });
   const result = await status({}, OPS);
   assert.equal(result.counts.audit, 1);
   assert.equal(result.audit[0].reason, 'below_threshold');
-  assert.deepEqual(result.chats, [{ chat_id: -1, mode: 'observe', lang: 'en', has_destination: 1,
-    last_message_at: '2026-10-09T00:00:00+00:00' }]);
+  assert.deepEqual(result.chats, [{ chat_id: -1, title: 'G', mode: 'observe', lang: 'en', has_destination: 1,
+    last_message_at: '2026-10-09T00:00:00+00:00', live_title: 'G now', bot_status: 'administrator' }]);
 });
