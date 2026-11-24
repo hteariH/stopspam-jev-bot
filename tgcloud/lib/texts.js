@@ -2,8 +2,7 @@
 //
 // Placeholders are Python str.format fields ({name}), filled by t().
 
-// The languages the bot speaks, in the order the /chats menu cycles through
-// them. English first: it is the default and the fallback.
+// The languages the bot speaks.
 export const LANGS = ['en', 'ru', 'uk'];
 
 export const STRINGS = {
@@ -112,70 +111,20 @@ export const STRINGS = {
     ru: "Слишком много запросов. Попробуйте ещё раз через минуту.",
     uk: "Забагато запитів. Спробуйте ще раз за хвилину.",
   },
-  "no_chats": {
-    en: "I am not in any group you administer yet. Add me to a group first.",
-    ru: "Я пока не состою ни в одной группе, где вы админ. Сначала добавьте меня в группу.",
-    uk: "Я ще не в жодній групі, де ви адміністратор. Спершу додайте мене до групи.",
+  "chats_open": {
+    en: "Your groups' settings are in the app below.",
+    ru: "Настройки ваших групп — в приложении по кнопке ниже.",
+    uk: "Налаштування ваших груп — у застосунку за кнопкою нижче.",
   },
-  "menu_title": {
-    en: "Settings for {title}",
-    ru: "Настройки для {title}",
-    uk: "Налаштування для {title}",
+  "btn_open_settings": {
+    en: "⚙️ Settings",
+    ru: "⚙️ Настройки",
+    uk: "⚙️ Налаштування",
   },
-  "menu_mode": {
-    en: "Mode",
-    ru: "Режим",
-    uk: "Режим",
-  },
-  "menu_jev": {
-    en: "Classification",
-    ru: "Классификация",
-    uk: "Класифікація",
-  },
-  "menu_lang": {
-    en: "Language",
-    ru: "Язык",
-    uk: "Мова",
-  },
-  "menu_thresholds": {
-    en: "Thresholds",
-    ru: "Пороги",
-    uk: "Пороги",
-  },
-  "menu_delete_threshold": {
-    en: "delete",
-    ru: "удаление",
-    uk: "видалення",
-  },
-  "menu_review_threshold": {
-    en: "review",
-    ru: "проверка",
-    uk: "перевірка",
-  },
-  "menu_log_chat": {
-    en: "Review cards go to",
-    ru: "Карточки проверки приходят",
-    uk: "Картки розбору надходять до",
-  },
-  "log_chat_unset": {
-    en: "nowhere — no destination is set, so cards are not delivered",
-    ru: "никуда — адресат не задан, карточки не отправляются",
-    uk: "нікуди — адресата не задано, тож картки не доставляються",
-  },
-  "log_chat_dm": {
-    en: "a private chat with admin {user_id}",
-    ru: "в личный чат с админом {user_id}",
-    uk: "особистий чат з адміністратором {user_id}",
-  },
-  "log_chat_group": {
-    en: "chat {chat_id}",
-    ru: "в чат {chat_id}",
-    uk: "чат {chat_id}",
-  },
-  "btn_log_here": {
-    en: "send cards to me",
-    ru: "присылать карточки мне",
-    uk: "надсилати картки мені",
+  "menu_moved": {
+    en: "Settings have moved to the app: send /chats.",
+    ru: "Настройки переехали в приложение: отправьте /chats.",
+    uk: "Налаштування переїхали в застосунок: надішліть /chats.",
   },
   "setlog_not_admin": {
     en: "Only an admin of this chat can use /setlog.",
@@ -192,31 +141,6 @@ export const STRINGS = {
     ru: "Не нашёл ваших групп, которые можно сюда перенаправить. Сначала напишите сообщение в нужной группе, чтобы я знал, что вы в ней, затем снова выполните /setlog здесь.",
     uk: "Я не знайшов жодної вашої групи, щоб перенаправити сюди. Спершу напишіть повідомлення в тій групі, щоб я знав, що ви в ній, а потім виконайте /setlog тут ще раз.",
   },
-  "menu_not_admin": {
-    en: "You are not an admin of that chat.",
-    ru: "Вы не админ этого чата.",
-    uk: "Ви не адміністратор того чату.",
-  },
-  "btn_mode_observe": {
-    en: "mode: observe",
-    ru: "режим: наблюдение",
-    uk: "режим: спостереження",
-  },
-  "btn_mode_active": {
-    en: "mode: active",
-    ru: "режим: активный",
-    uk: "режим: активний",
-  },
-  "btn_jev_on": {
-    en: "classification: on",
-    ru: "классификация: вкл",
-    uk: "класифікація: увімк",
-  },
-  "btn_jev_off": {
-    en: "classification: off",
-    ru: "классификация: выкл",
-    uk: "класифікація: вимк",
-  },
   "card_not_entitled": {
     en: "I would have deleted this, but this group has no subscription.",
     ru: "Я бы это удалил, но у группы нет подписки.",
@@ -226,36 +150,6 @@ export const STRINGS = {
     en: "Subscribe — {stars} ⭐/month",
     ru: "Подписка — {stars} ⭐/мес",
     uk: "Підписка — {stars} ⭐/міс",
-  },
-  "menu_billing": {
-    en: "Plan",
-    ru: "Тариф",
-    uk: "Тариф",
-  },
-  "billing_free": {
-    en: "free ({count} members, under {limit})",
-    ru: "бесплатный ({count} участников, до {limit})",
-    uk: "безкоштовний ({count} учасників, до {limit})",
-  },
-  "billing_subscribed": {
-    en: "paid, {days} days left",
-    ru: "оплачено, осталось дней: {days}",
-    uk: "оплачено, залишилось днів: {days}",
-  },
-  "billing_grace": {
-    en: "free trial, {days} days left",
-    ru: "пробный период, осталось дней: {days}",
-    uk: "пробний період, залишилось днів: {days}",
-  },
-  "billing_none": {
-    en: "no subscription — I report spam but do not delete it",
-    ru: "нет подписки — спам показываю, но не удаляю",
-    uk: "немає підписки — спам показую, але не видаляю",
-  },
-  "btn_start_deleting": {
-    en: "Seen enough — start deleting",
-    ru: "Хватит наблюдать — начать удалять",
-    uk: "Досить спостерігати — почати видаляти",
   },
   "invoice_title": {
     en: "StopSpam: auto-delete",
@@ -291,11 +185,6 @@ export const STRINGS = {
     en: "Your payment went through, but I could not record it. Nothing is lost — contact the bot's author with this message.",
     ru: "Оплата прошла, но я не смог её записать. Ничего не потеряно — напишите автору бота, показав это сообщение.",
     uk: "Оплата пройшла, але я не зміг її записати. Нічого не втрачено — напишіть автору бота, показавши це повідомлення.",
-  },
-  "invoice_unavailable": {
-    en: "Telegram would not give me a payment link just now. Try again in a minute.",
-    ru: "Telegram сейчас не выдал ссылку на оплату. Попробуйте через минуту.",
-    uk: "Telegram зараз не видав посилання на оплату. Спробуйте за хвилину.",
   },
   "notice_grace": {
     en: "{title} has grown past {limit} members, so automatic deletion now needs a subscription. It keeps working free for {days} more days.",

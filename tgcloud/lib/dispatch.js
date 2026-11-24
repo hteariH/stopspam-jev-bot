@@ -4,7 +4,7 @@
 //   message:  payments (successful_payment, any chat)
 //             -> admin (private chats: /start, /help, /privacy, /chats)
 //             -> group (groups and supergroups: /setlog, then everything else)
-//   callback_query: "cfg:" -> admin, "rv:" -> review
+//   callback_query: "cfg:" -> admin (old menu: "settings moved"), "rv:" -> review
 //   pre_checkout_query -> payments
 //   my_chat_member (groups and supergroups) -> group
 //
@@ -64,7 +64,7 @@ export async function dispatchMessage(message, bot = makeBot(api)) {
 export async function dispatchCallbackQuery(query, bot = makeBot(api)) {
   const data = query.data;
   if (typeof data !== 'string') return undefined;
-  if (data.startsWith('cfg:')) return admin.onConfig(bot, query);
+  if (data.startsWith('cfg:')) return admin.onMovedMenu(bot, query);
   if (data.startsWith('rv:')) return review.onCardButton(bot, query);
   return undefined;
 }

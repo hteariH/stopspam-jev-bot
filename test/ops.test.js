@@ -18,6 +18,7 @@ import status from '../tgcloud/endpoints/ops_status.js';
 import appChats from '../tgcloud/endpoints/app_chats.js';
 import appChat from '../tgcloud/endpoints/app_chat.js';
 import appUpdate from '../tgcloud/endpoints/app_update.js';
+import * as config from '../tgcloud/lib/config.js';
 import * as settings from '../tgcloud/lib/storage/settings.js';
 import * as reviews from '../tgcloud/lib/storage/reviews.js';
 import { batches, plainRows, TABLES } from '../tools/migrate_from_sqlite.mjs';
@@ -70,6 +71,7 @@ test('the secret is stored trimmed and never returned', async () => {
 test('the commands are the ones the Python bot set at start', async () => {
   await setCommands({}, OPS);
   assert.deepEqual(calls('setMyCommands')[0].commands.map((c) => c.command), ['chats', 'setlog', 'privacy', 'help']);
+  assert.deepEqual(calls('setChatMenuButton')[0].menu_button.web_app, { url: config.APP_URL });
 });
 
 test('ops_classify reports a classifier failure instead of throwing', async () => {

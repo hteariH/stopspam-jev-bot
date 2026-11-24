@@ -118,10 +118,10 @@ test('the invoice title fits the 32-character limit in every language', () => {
 });
 
 test('every billing key exists in every language', () => {
-  const keys = ['card_not_entitled', 'btn_subscribe', 'menu_billing', 'billing_free',
-    'billing_subscribed', 'billing_grace', 'billing_none', 'btn_start_deleting', 'invoice_title',
+  const keys = ['card_not_entitled', 'btn_subscribe', 'invoice_title',
     'invoice_description', 'invoice_label', 'pay_thanks', 'pay_cancel_hint', 'pay_rejected',
-    'pay_unrecorded', 'invoice_unavailable', 'notice_grace', 'notice_grace_ending', 'notice_lapsed'];
+    'pay_unrecorded', 'notice_grace', 'notice_grace_ending', 'notice_lapsed',
+    'chats_open', 'btn_open_settings', 'menu_moved'];
   for (const key of keys) {
     assert.ok(key in STRINGS, key);
     assert.deepEqual(Object.keys(STRINGS[key]).sort(), ['en', 'ru', 'uk'], key);

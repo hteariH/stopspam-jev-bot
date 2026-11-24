@@ -33,3 +33,6 @@ export const MEMBER_COUNT_TTL_HOURS = 24;
 
 // Not tunable: createInvoiceLink rejects every other value today.
 export const SUBSCRIPTION_PERIOD = 2592000;
+
+// The Mini App, served by Telegram Serverless next to the bot (tgcloud.jsonc "static").
+export const APP_URL = 'https://app8792794574.tgcloud.ai/';
