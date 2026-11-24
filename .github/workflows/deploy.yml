@@ -28,6 +28,10 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Catches front-end build errors before merge.
+      - name: Build the Mini App
+        run: npm run build
+
   deploy:
     name: Deploy to Telegram Serverless
     needs: test

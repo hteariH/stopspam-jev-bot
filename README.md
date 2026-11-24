@@ -185,8 +185,9 @@ or webhook to manage.
 tgcloud/
   schema.js        the database tables
   handlers/        one file per Telegram update type; all four route through lib/dispatch.js
-  endpoints/       ops_* one-off operations, run with `tgcloud run` (see below)
+  endpoints/       app_* Mini App endpoints, and ops_* one-off operations run with `tgcloud run` (see below)
   lib/             everything else: core/ (moderation), storage/, handlers/, texts.js
+app/               Mini App front-end (Vite + Preact), built into dist/
 ```
 
 The modules may import only the platform SDK (`sdk`, `sdk/db`) and each
@@ -209,7 +210,7 @@ dependency; without it installed, `npx tgcloud` would download the unrelated
 npm package that happens to be called `tgcloud`.
 
 Schema changes are never applied by a push. After changing
-`tgcloud/schema.js`, read what `npx tgcloud push` reports and apply it with
+`tgcloud/schema.js`, read what `npm run deploy` reports and apply it with
 `npx tgcloud migrate`.
 
 ### Settings and one-off operations
