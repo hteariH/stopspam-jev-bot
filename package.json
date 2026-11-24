@@ -4,10 +4,15 @@
   "type": "module",
   "scripts": {
     "test": "node --import ./test/fakes/register.mjs --test \"test/**/*.test.js\"",
+    "dev": "vite",
+    "build": "vite build",
     "status": "tgcloud status",
-    "deploy": "tgcloud push"
+    "deploy": "vite build && tgcloud push"
   },
   "devDependencies": {
-    "@tgcloud/cli": "0.2.0"
+    "@preact/preset-vite": "2.10.6",
+    "@tgcloud/cli": "0.2.0",
+    "preact": "10.29.8",
+    "vite": "8.3.8"
   }
 }

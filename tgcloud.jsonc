@@ -1,4 +1,5 @@
-// The bot has no Mini App: nothing is hosted, only tgcloud/ modules deploy.
+// The Mini App's build output, served at https://app8792794574.tgcloud.ai/.
+// Build first (npm run build): push never builds.
 {
-  "static": false
+  "static": { "source": "dist", "immutable": ["/assets/*"] }
 }
