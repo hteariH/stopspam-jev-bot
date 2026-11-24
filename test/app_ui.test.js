@@ -223,3 +223,18 @@ test('syncChat patches the matching chat summary from a server view', () => {
   ]);
   assert.equal(chats[0].title, 'Old', 'input array is not mutated');
 });
+
+test('tierRows turns the price list into ranges and prices', () => {
+  const rows = logic.tierRows([
+    { tier: 'free', up_to: 200, stars: null },
+    { tier: 'small', up_to: 1000, stars: 50 },
+    { tier: 'large', up_to: null, stars: 250 },
+  ], 'small');
+  assert.deepEqual(rows.map((r) => [r.rangeKey, r.range, r.priceKey, r.price.stars, r.current]), [
+    ['tier_free', { from: 1, to: 200 }, 'tier_price_free', null, false],
+    ['tier_small', { from: 201, to: 1000 }, 'tier_price', 50, true],
+    ['tier_large', { from: 1000 }, 'tier_price', 250, false],
+  ]);
+  assert.equal(tr('ru', rows[1].rangeKey, rows[1].range), '201–1000 участников');
+  assert.deepEqual(logic.tierRows(undefined, 'free'), []);
+});

@@ -58,6 +58,23 @@ test('/start greets in English', async () => {
   assert.ok(text.includes('/chats'));
 });
 
+test('/start and /help list every tier with its price from config', async () => {
+  for (const cmd of ['/start', '/help']) {
+    await dm(cmd);
+    const text = sent().at(-1).text;
+    assert.ok(text.includes(`Up to ${config.FREE_MEMBER_LIMIT} members: free`), cmd);
+    assert.ok(text.includes(`${config.PRICE_SMALL_STARS} ⭐`), cmd);
+    assert.ok(text.includes(`${config.PRICE_LARGE_STARS} ⭐`), cmd);
+    assert.ok(text.includes(`${config.GRACE_DAYS} days free`), cmd);
+  }
+});
+
+test('/help speaks the sender\'s language', async () => {
+  await dispatchMessage({ message_id: 1, date: 1, chat: { id: ADMIN, type: 'private' },
+    from: { id: ADMIN, is_bot: false, first_name: 'Boss', language_code: 'ru' }, text: '/help' }, bot());
+  assert.ok(sent().at(-1).text.includes('Тарифы'));
+});
+
 test('/start with a deep-link argument still greets', async () => {
   await dm('/start from_group');
   assert.ok(sent().at(-1).text.includes('/chats'));

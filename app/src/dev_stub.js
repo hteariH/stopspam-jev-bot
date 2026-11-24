@@ -4,8 +4,11 @@ const chat = {
   chat_id: -1001, title: 'Demo group', mode: 'observe', observing: true, observe_days_left: 5,
   jev_enabled: true, delete_threshold: 0.9, review_threshold: 0.55, confidence_floor: 0.75,
   trust_after: 5, lang: 'en', cards: { kind: 'unset', id: null },
-  plan: { kind: 'none', days: null, members: 640, limit: 200, offer_stars: 250 },
-  subscribe_url: 'https://t.me/$demo', subscribe_stars: 250,
+  plan: {
+    kind: 'none', days: null, members: 640, limit: 200, offer_stars: 50, tier: 'small', grace_days: 14,
+    tiers: [{ tier: 'free', up_to: 200, stars: null }, { tier: 'small', up_to: 1000, stars: 50 }, { tier: 'large', up_to: null, stars: 250 }],
+  },
+  subscribe_url: 'https://t.me/$demo', subscribe_stars: 50,
 };
 const noop = () => {};
 window.Telegram = { WebApp: {

@@ -18,6 +18,25 @@ export function badge(summary) {
   return { key: 'badge_active' };
 }
 
+// The price list as rows to render: each tier's member range and price as
+// string keys plus their values. A tier starts one above the previous one's
+// upper bound; the last tier has no upper bound.
+export function tierRows(tiers, current) {
+  let prev = 0;
+  return (tiers || []).map((t) => {
+    const row = {
+      tier: t.tier,
+      current: t.tier === current,
+      rangeKey: t.up_to === null ? 'tier_large' : prev === 0 ? 'tier_free' : 'tier_small',
+      range: t.up_to === null ? { from: prev } : { from: prev + 1, to: t.up_to },
+      priceKey: t.stars ? 'tier_price' : 'tier_price_free',
+      price: { stars: t.stars },
+    };
+    if (t.up_to !== null) prev = t.up_to;
+    return row;
+  });
+}
+
 const ERRORS = {
   NOT_ADMIN: 'err_not_admin',
   RATE_LIMITED: 'err_rate_limited',

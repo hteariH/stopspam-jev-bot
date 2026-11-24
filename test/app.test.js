@@ -6,6 +6,7 @@ import * as app from '../tgcloud/lib/app.js';
 import * as chats from '../tgcloud/lib/storage/chats.js';
 import * as billing from '../tgcloud/lib/storage/billing.js';
 import { addDays, stamp, now, _setNow } from '../tgcloud/lib/clock.js';
+import * as config from '../tgcloud/lib/config.js';
 
 const ADMIN = 777;
 let chat;
@@ -144,4 +145,15 @@ test('summaryView is the list entry', () => {
   assert.deepEqual(app.summaryView(chat, billing.empty(chat.chat_id)), {
     chat_id: chat.chat_id, title: 'G', mode: 'observe', observing: true, observe_days_left: 7, plan: 'free',
   });
+});
+
+test('planView carries the whole price list and the current tier', () => {
+  const view = app.planView(billing.BillingRow(-1, { member_count: 640 }), now());
+  assert.equal(view.tier, 'small');
+  assert.deepEqual(view.tiers.map((t) => [t.tier, t.up_to, t.stars]), [
+    ['free', config.FREE_MEMBER_LIMIT, null],
+    ['small', config.SMALL_MEMBER_LIMIT, config.PRICE_SMALL_STARS],
+    ['large', null, config.PRICE_LARGE_STARS],
+  ]);
+  assert.equal(view.grace_days, config.GRACE_DAYS);
 });

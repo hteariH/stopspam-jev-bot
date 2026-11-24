@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { call } from './api.js';
 import { tr } from './i18n.js';
 import {
-  badge, cardsKey, createPopupGuard, createSaveQueue, errorKey, fmt, STEP,
+  badge, cardsKey, createPopupGuard, createSaveQueue, errorKey, fmt, STEP, tierRows,
 } from './logic.js';
 
 const LANGS = ['en', 'ru', 'uk'];
@@ -124,6 +124,31 @@ export function ChatSettings({ lang, chatId, onSync }) {
         )}
       </Section>
 
+      <Section title={tr(lang, 'sec_plan')}>
+        <div class="row column">
+          <span>{tr(lang, `plan_${plan.kind}`, plan)}</span>
+          {view.subscribe_url && (
+            <button class="primary" onClick={subscribe}>{tr(lang, 'subscribe', { stars: view.subscribe_stars })}</button>
+          )}
+        </div>
+        {tierRows(plan.tiers, plan.tier).map((r) => (
+          <div key={r.tier} class={r.current ? 'row tier current' : 'row tier'}>
+            <span class="row-line">
+              <span>
+                {tr(lang, r.rangeKey, r.range)}
+                {r.current && <small> · {tr(lang, 'tier_current')}</small>}
+              </span>
+              <b>{tr(lang, r.priceKey, r.price)}</b>
+            </span>
+          </div>
+        ))}
+        {plan.tiers && (
+          <div class="row column">
+            <small>{tr(lang, 'plan_note', { limit: plan.limit, grace: plan.grace_days })}</small>
+          </div>
+        )}
+      </Section>
+
       <Section title={tr(lang, 'sec_thresholds')}>
         <Slider label={tr(lang, 'delete_threshold')} hint={tr(lang, 'delete_hint')}
           value={view.delete_threshold} onSave={(v) => save({ delete_threshold: v })} />
@@ -158,14 +183,6 @@ export function ChatSettings({ lang, chatId, onSync }) {
         </div>
       </Section>
 
-      <Section title={tr(lang, 'sec_plan')}>
-        <div class="row column">
-          <span>{tr(lang, `plan_${plan.kind}`, plan)}</span>
-          {view.subscribe_url && (
-            <button class="primary" onClick={subscribe}>{tr(lang, 'subscribe', { stars: view.subscribe_stars })}</button>
-          )}
-        </div>
-      </Section>
     </main>
   );
 }

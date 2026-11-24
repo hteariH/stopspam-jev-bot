@@ -24,12 +24,26 @@ async function say(bot, message, body, options = {}) {
   }
 }
 
+// Prices come from config, so the text cannot drift from what is charged.
+export function pricing(lang = 'en') {
+  return t('pricing', lang, {
+    free: config.FREE_MEMBER_LIMIT,
+    small_from: config.FREE_MEMBER_LIMIT + 1,
+    small_to: config.SMALL_MEMBER_LIMIT,
+    small_stars: config.PRICE_SMALL_STARS,
+    large_stars: config.PRICE_LARGE_STARS,
+    grace: config.GRACE_DAYS,
+  });
+}
+
 export async function onStart(bot, message) {
-  await say(bot, message, t('welcome'));
+  const lang = langOf(message.from);
+  await say(bot, message, `${t('welcome', lang)}\n\n${pricing(lang)}`);
 }
 
 export async function onHelp(bot, message) {
-  await say(bot, message, t('help'));
+  const lang = langOf(message.from);
+  await say(bot, message, `${t('help', lang)}\n\n${pricing(lang)}`);
 }
 
 export async function onPrivacy(bot, message) {

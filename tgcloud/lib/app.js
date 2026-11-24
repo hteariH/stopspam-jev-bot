@@ -86,10 +86,20 @@ export function changes(chat, fields, userId) {
   return out;
 }
 
+// The whole price list, so the app can show every tier and not only the
+// one this group is on.
+export function priceList() {
+  return [
+    { tier: tiers.FREE, up_to: config.FREE_MEMBER_LIMIT, stars: null },
+    { tier: tiers.SMALL, up_to: config.SMALL_MEMBER_LIMIT, stars: tiers.priceFor(tiers.SMALL) },
+    { tier: tiers.LARGE, up_to: null, stars: tiers.priceFor(tiers.LARGE) },
+  ];
+}
+
 export function planView(row, at = now()) {
   const members = row.member_count || 0;
-  const base = { members, limit: config.FREE_MEMBER_LIMIT };
   const tier = tiers.tierFor(row.member_count);
+  const base = { members, limit: config.FREE_MEMBER_LIMIT, tier, tiers: priceList(), grace_days: config.GRACE_DAYS };
   if (tier === tiers.FREE) return { kind: 'free', days: null, ...base, offer_stars: null };
   const ent = tiers.build(tier, { paidUntil: row.paid_until, graceUntil: row.grace_until, now: at });
   // The same condition the old menu used to show the subscribe button.

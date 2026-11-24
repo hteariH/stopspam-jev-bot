@@ -41,3 +41,4 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .stepper { display: flex; align-items: center; gap: 4px; }
 .stepper b { min-width: 2ch; text-align: center; }
 .stepper button { padding: 4px 12px; font-size: 18px; }
+.row.tier.current { background: color-mix(in srgb, var(--accent) 10%, transparent); }
