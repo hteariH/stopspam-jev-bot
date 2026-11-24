@@ -13,18 +13,25 @@ window.Telegram = { WebApp: {
   ready: noop, expand: noop,
   BackButton: { show: noop, hide: noop, onClick: noop, offClick: noop },
   HapticFeedback: { impactOccurred: noop },
-  showAlert: (m) => window.alert(m),
+  showAlert: (m, cb) => { window.alert(m); if (cb) cb(); },
   showConfirm: (m, cb) => cb(window.confirm(m)),
   openInvoice: (_u, cb) => cb('cancelled'),
   Serverless: { call(name, input, cb) {
     setTimeout(() => {
-      if (name === 'app_chats') return cb(null, { chats: [{ chat_id: chat.chat_id, title: chat.title, mode: chat.mode, observing: chat.observing, observe_days_left: 5, plan: 'none' }] });
-      if (name === 'app_chat') return cb(null, chat);
+      if (name === 'app_chats') {
+        return cb(null, { chats: [{ chat_id: chat.chat_id, title: chat.title, mode: chat.mode, observing: chat.observing, observe_days_left: chat.observe_days_left, plan: chat.plan.kind }] });
+      }
+      if (name === 'app_chat') return cb(null, { ...chat });
       if (name === 'app_update') {
-        if (input.fields.review_threshold > chat.delete_threshold) return cb({ type: 'ENDPOINT_ERROR', parameters: { code: 'INVALID' } });
-        Object.assign(chat, input.fields);
-        if (input.fields.end_observe) Object.assign(chat, { mode: 'active', observing: false });
-        if (input.fields.log_to_me) chat.cards = { kind: 'me', id: 1 };
+        const merged = { ...chat, ...input.fields };
+        if (merged.review_threshold > merged.delete_threshold) {
+          return cb({ type: 'ENDPOINT_ERROR', parameters: { code: 'INVALID' } });
+        }
+        const { end_observe: endObserve, log_to_me: logToMe, ...rest } = input.fields;
+        Object.assign(chat, rest);
+        if (rest.mode) chat.observing = rest.mode === 'observe' || chat.observe_days_left > 0;
+        if (endObserve) Object.assign(chat, { mode: 'active', observing: false, observe_days_left: 0 });
+        if (logToMe) chat.cards = { kind: 'me', id: 1 };
         return cb(null, { ...chat });
       }
       return cb({ type: 'UNKNOWN' });

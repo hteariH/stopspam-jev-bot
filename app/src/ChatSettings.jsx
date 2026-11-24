@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 
 import { call } from './api.js';
 import { tr } from './i18n.js';
-import { applyLocal, cardsKey, errorKey, fmt, STEP } from './logic.js';
+import {
+  badge, cardsKey, createPopupGuard, createSaveQueue, errorKey, fmt, STEP,
+} from './logic.js';
 
 const LANGS = ['en', 'ru', 'uk'];
 // Read on use, not at import: in dev the stub installs it after this module loads.
@@ -13,14 +15,15 @@ function Section({ title, children }) {
 }
 
 function Slider({ label, hint, value, onSave }) {
-  const [local, setLocal] = useState(value);
-  useEffect(() => setLocal(value), [value]);
+  const [draft, setDraft] = useState(null);
+  useEffect(() => setDraft(null), [value]);
+  const shown = draft === null ? value : draft;
   return (
     <label class="row column">
-      <span class="row-line"><span>{label}</span><b>{fmt(local)}</b></span>
-      <input type="range" min="0" max="1" step={STEP} value={local}
-        onInput={(e) => setLocal(Number(e.currentTarget.value))}
-        onChange={(e) => onSave(Number(e.currentTarget.value))} />
+      <span class="row-line"><span>{label}</span><b>{fmt(shown)}</b></span>
+      <input type="range" min="0" max="1" step={STEP} value={shown}
+        onInput={(e) => setDraft(Number(e.currentTarget.value))}
+        onChange={(e) => { setDraft(null); onSave(Number(e.currentTarget.value)); }} />
       <small>{hint}</small>
     </label>
   );
@@ -36,42 +39,66 @@ function Segments({ options, value, onPick }) {
   );
 }
 
-export function ChatSettings({ lang, chatId }) {
+export function ChatSettings({ lang, chatId, onSync }) {
   const [view, setView] = useState(null);
   const [error, setError] = useState(null);
+  const queueRef = useRef(null);
+  const runPopup = useRef(null);
+  if (!runPopup.current) runPopup.current = createPopupGuard();
+
+  function showError(e) {
+    runPopup.current((done) => tg().showAlert(tr(lang, errorKey(e)), done));
+  }
 
   useEffect(() => {
+    const q = createSaveQueue({
+      send: (fields) => call('app_update', { chat_id: chatId, fields }),
+      onView: setView,
+      onServerView: onSync,
+      onSaved: () => tg().HapticFeedback.impactOccurred('light'),
+      onError: showError,
+    });
+    queueRef.current = q;
     setView(null);
-    call('app_chat', { chat_id: chatId }).then(setView, (e) => setError(errorKey(e)));
+    setError(null);
+    let active = true;
+    call('app_chat', { chat_id: chatId }).then(
+      (v) => active && q.setServerView(v),
+      (e) => active && setError(errorKey(e)),
+    );
+    return () => {
+      active = false;
+      q.close();
+    };
   }, [chatId]);
 
-  // Optimistic: show the change, then replace it with the server's view, or
-  // put the last server view back and say why.
   function save(fields) {
-    const before = view;
-    setView(applyLocal(view, fields));
-    call('app_update', { chat_id: chatId, fields }).then((next) => {
-      setView(next);
-      tg().HapticFeedback.impactOccurred('light');
-    }, (e) => {
-      setView(before);
-      tg().showAlert(tr(lang, errorKey(e)));
-    });
+    if (queueRef.current) queueRef.current.save(fields);
   }
 
   function startDeleting() {
-    tg().showConfirm(tr(lang, 'start_deleting_confirm'), (ok) => ok && save({ end_observe: true }));
+    runPopup.current((done) => tg().showConfirm(tr(lang, 'start_deleting_confirm'), (ok) => {
+      done();
+      if (ok) save({ end_observe: true });
+    }));
   }
 
   function subscribe() {
+    const q = queueRef.current;
     tg().openInvoice(view.subscribe_url, (status) => {
-      if (status === 'paid') call('app_chat', { chat_id: chatId }).then(setView, () => {});
+      if (status === 'paid') {
+        call('app_chat', { chat_id: chatId }).then(
+          (v) => q && q.setServerView(v),
+          showError,
+        );
+      }
     });
   }
 
   if (error) return <p class="note">{tr(lang, error)}</p>;
   if (view === null) return <p class="note">{tr(lang, 'loading')}</p>;
   const plan = view.plan;
+  const b = badge(view);
   return (
     <main>
       <h1>{view.title}</h1>
@@ -91,7 +118,7 @@ export function ChatSettings({ lang, chatId }) {
         </label>
         {view.observing && (
           <div class="row column">
-            <small>{tr(lang, 'badge_observe', { days: view.observe_days_left })}</small>
+            <small>{tr(lang, b.key, { days: b.days })}</small>
             <button class="primary" onClick={startDeleting}>{tr(lang, 'start_deleting')}</button>
           </div>
         )}

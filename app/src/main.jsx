@@ -3,11 +3,12 @@ import { useEffect, useState } from 'preact/hooks';
 
 import { ChatList } from './ChatList.jsx';
 import { ChatSettings } from './ChatSettings.jsx';
-import { uiLang } from './logic.js';
+import { syncChat, uiLang } from './logic.js';
 import './styles.css';
 
 function App({ lang }) {
   const [chatId, setChatId] = useState(null);
+  const [chats, setChats] = useState(null);
   const tg = window.Telegram.WebApp;
 
   useEffect(() => {
@@ -21,12 +22,16 @@ function App({ lang }) {
     return () => tg.BackButton.offClick(back);
   }, [chatId]);
 
+  const onSync = (view) => setChats((prev) => syncChat(prev, view));
+
   // The list stays mounted (hidden) so going back does not refetch it and
   // spend the 3-per-minute listing budget.
   return (
     <>
-      <div hidden={chatId !== null}><ChatList lang={lang} onOpen={setChatId} /></div>
-      {chatId !== null && <ChatSettings lang={lang} chatId={chatId} />}
+      <div hidden={chatId !== null}>
+        <ChatList lang={lang} chats={chats} onLoad={setChats} onOpen={setChatId} />
+      </div>
+      {chatId !== null && <ChatSettings lang={lang} chatId={chatId} onSync={onSync} />}
     </>
   );
 }

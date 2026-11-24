@@ -4,12 +4,11 @@ import { call } from './api.js';
 import { tr } from './i18n.js';
 import { badge, errorKey } from './logic.js';
 
-export function ChatList({ lang, onOpen }) {
-  const [chats, setChats] = useState(null);
+export function ChatList({ lang, chats, onLoad, onOpen }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    call('app_chats').then((r) => setChats(r.chats), (e) => setError(errorKey(e)));
+    call('app_chats').then((r) => onLoad(r.chats), (e) => setError(errorKey(e)));
   }, []);
 
   if (error) return <p class="note">{tr(lang, error)}</p>;
