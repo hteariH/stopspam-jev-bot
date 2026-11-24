@@ -15,6 +15,9 @@ import setCommands from '../tgcloud/endpoints/ops_set_commands.js';
 import classify from '../tgcloud/endpoints/ops_classify.js';
 import deleteWebhook from '../tgcloud/endpoints/ops_delete_webhook.js';
 import status from '../tgcloud/endpoints/ops_status.js';
+import appChats from '../tgcloud/endpoints/app_chats.js';
+import appChat from '../tgcloud/endpoints/app_chat.js';
+import appUpdate from '../tgcloud/endpoints/app_update.js';
 import * as settings from '../tgcloud/lib/storage/settings.js';
 import * as reviews from '../tgcloud/lib/storage/reviews.js';
 import { batches, plainRows, TABLES } from '../tools/migrate_from_sqlite.mjs';
@@ -22,12 +25,13 @@ import { batches, plainRows, TABLES } from '../tools/migrate_from_sqlite.mjs';
 beforeEach(fresh);
 
 const OPS = { ops: true };
-const ENDPOINTS = [setSecret, importRows, counts, setCommands, classify, deleteWebhook, status];
+const OPS_ENDPOINTS = [setSecret, importRows, counts, setCommands, classify, deleteWebhook, status];
+const APP_ENDPOINTS = [appChats, appChat, appUpdate];
 
-// Over HTTP an endpoint only runs with verified Mini App init data; none of
-// these may run that way, or without the explicit flag only the CLI sets.
+// Over HTTP an endpoint only runs with verified Mini App init data; no ops
+// endpoint may run that way, or without the explicit flag only the CLI sets.
 test('every ops endpoint refuses a Mini App call and a call without the flag', async () => {
-  for (const endpoint of ENDPOINTS) {
+  for (const endpoint of OPS_ENDPOINTS) {
     for (const ctx of [undefined, {}, { ops: 'true' }, { initData: { user: { id: 1 } } },
       { ops: true, initData: { user: { id: 1 } } }]) {
       await assert.rejects(endpoint({ value: 'k', table: 'chats', rows: [] }, ctx), { name: 'EndpointError' });
@@ -37,9 +41,22 @@ test('every ops endpoint refuses a Mini App call and a call without the flag', a
   assert.deepEqual(calls('setMyCommands'), []);
 });
 
+// And the other way round: a Mini App endpoint never runs from the CLI.
+test('every app endpoint refuses a call without init data', async () => {
+  for (const endpoint of APP_ENDPOINTS) {
+    for (const ctx of [undefined, {}, OPS, { initData: {} }]) {
+      await assert.rejects(endpoint({ chat_id: -1, fields: { lang: 'ru' } }, ctx),
+        (e) => e.name === 'EndpointError' && e.parameters.code === 'FORBIDDEN');
+    }
+  }
+  assert.deepEqual(calls('getChatMember'), []);
+});
+
 test('every endpoint file is guarded', () => {
   const files = readdirSync(new URL('../tgcloud/endpoints/', import.meta.url));
-  assert.equal(files.length, ENDPOINTS.length, 'a new endpoint needs adding to the guard test');
+  assert.equal(files.length, OPS_ENDPOINTS.length + APP_ENDPOINTS.length,
+    'a new endpoint needs adding to OPS_ENDPOINTS or APP_ENDPOINTS');
+  assert.equal(files.filter((f) => f.startsWith('app_')).length, APP_ENDPOINTS.length);
 });
 
 test('the secret is stored trimmed and never returned', async () => {
