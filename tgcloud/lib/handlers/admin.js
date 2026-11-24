@@ -8,7 +8,8 @@ import * as config from '../config.js';
 import * as guards from '../core/guards.js';
 import * as offer from '../core/offer.js';
 import * as tiers from '../core/tiers.js';
-import { RateLimiter } from '../core/ratelimit.js';
+import { adminChats, chatsLimiter } from '../core/admins.js';
+export { MAX_MENU_CHATS, CHATS_PER_MINUTE } from '../core/admins.js';
 import * as billing from '../storage/billing.js';
 import * as chats from '../storage/chats.js';
 import { now, stamp } from '../clock.js';
@@ -22,12 +23,6 @@ const log = logger('stopspam.admin');
 
 export const THRESHOLD_STEP = 0.05;
 
-// Hard cap on how many chats one /chats can look up and render, which bounds
-// what a stranger can make the bot spend in one command...
-export const MAX_MENU_CHATS = 20;
-// ...and a per-user limit on how often they can spend it at all.
-export const CHATS_PER_MINUTE = 3;
-const chatsLimiter = new RateLimiter('chats', CHATS_PER_MINUTE);
 const TOGGLE_FIELDS = new Set(['mode', 'jev', 'lang', 'log', 'gonow']);
 const THRESHOLD_FIELDS = new Set(['delete_threshold', 'review_threshold', 'confidence_floor']);
 const DELTAS = new Set(['+', '-']);
@@ -35,22 +30,6 @@ const DELTAS = new Set(['+', '-']);
 // A button press must always get an answer back to the admin's client, even
 // if the database fails.
 const bestEffort = (...args) => guards.bestEffort(log, ...args);
-
-// Chats the caller administers, re-verified against Telegram, not cached.
-// The candidate set is narrowed in storage first, so the number of
-// getChatMember calls is bounded by MAX_MENU_CHATS.
-async function adminChats(bot, userId) {
-  const candidates = (await bestEffort('candidate_chats', userId, chats.candidateChatIds,
-    userId, MAX_MENU_CHATS)) || [];
-  const result = [];
-  for (const chatId of candidates) {
-    if (await guards.isAdmin(bot, chatId, userId)) {
-      const chat = await bestEffort('get_chat', chatId, chats.getChat, chatId);
-      if (chat !== null) result.push(chat);
-    }
-  }
-  return result;
-}
 
 function modeLabel(chat, lang) {
   return t(chat.mode === 'observe' ? 'btn_mode_active' : 'btn_mode_observe', lang);
