@@ -29,7 +29,7 @@ Groups of **200 members or fewer use the whole bot for free**, including
 automatic deletion, with no time limit.
 
 Above that, automatic deletion needs a subscription, paid in Telegram
-Stars from the `/chats` menu:
+Stars from the settings app (`/chats` opens it):
 
 | Members | Price |
 |---|---|
@@ -65,13 +65,13 @@ bot's calls in their own group before trusting it with delete and ban
 rights, rather than being asked to trust it on faith from the first message.
 
 After the observation window, enforcement is the admin's explicit decision:
-switch the chat to active mode with `/chats` in a private message to the
-bot. Nothing about crossing day 7 turns enforcement on by itself. A chat can
-also be put back into observe mode at any time, and classification itself
-can be switched off entirely per chat.
+send `/chats` in a private message to the bot to open the settings app and
+switch the chat to active mode. Nothing about crossing day 7 turns enforcement
+on by itself. A chat can also be put back into observe mode at any time, and
+classification itself can be switched off entirely per chat.
 
-The bot speaks **English, Russian and Ukrainian**, set per chat from the same
-menu. English is the default and the fallback: a string with no translation
+The bot speaks **English, Russian and Ukrainian**, set per chat in the same
+app. English is the default and the fallback: a string with no translation
 appears in English rather than blank, and a test fails the build if any string
 is missing from any language.
 
@@ -87,8 +87,8 @@ Cards go to a private destination instead:
 
 - When you add the bot to a group, cards for that group go to **your** direct
   messages with it, from the first message onwards.
-- Another admin can take the queue over from the `/chats` menu, which points
-  that group's cards at their own direct messages.
+- Another admin can take the queue over in the settings app (`/chats`), which
+  points that group's cards at their own direct messages.
 - To send cards to a dedicated moderator group instead, add the bot there and
   run `/setlog` in it. Every group you administer that the bot knows you are
   in will post its cards there from then on. You must be an admin of both the
@@ -120,8 +120,9 @@ review queue instead of being deleted — the bot would rather ask an admin
 than act on a guess it isn't confident in.
 
 The thresholds that drive this (`delete_threshold`, `review_threshold`,
-`confidence_floor` in `tgcloud/lib/config.js`, adjustable per chat with `/chats`) are
-currently set by judgment, not by measurement against a labelled dataset.
+`confidence_floor` in `tgcloud/lib/config.js`, adjustable per chat in the
+settings app that `/chats` opens) are currently set by judgment, not by
+measurement against a labelled dataset.
 There is no accuracy number to quote here yet — the review queue exists in
 part to build that evidence over time, and the thresholds should be revisited
 once it does.
@@ -168,10 +169,10 @@ deletes from it, because a disputed or refunded charge cannot be looked up
 without it — Telegram sends no "payment revoked" update, so this is the only
 record that will exist.
 
-Any admin can turn classification off for their chat at any time with
-`/chats`. This section is meant to match exactly what the bot's own
-`/privacy` command tells an admin in Telegram — if the two ever disagree,
-that is a bug in one of them.
+Any admin can turn classification off for their chat at any time in the
+settings app (`/chats` opens it). This section is meant to match exactly what
+the bot's own `/privacy` command tells an admin in Telegram — if the two ever
+disagree, that is a bug in one of them.
 
 ## How it runs
 
@@ -193,14 +194,14 @@ other; there are no npm packages at runtime.
 
 ### Deploying
 
-Pushing to `master` runs the tests and then `tgcloud push`, given a
-`TGCLOUD_TOKEN` repository secret (the project token from @BotFather →
-Bot → Serverless). By hand, from the project root:
+Pushing to `master` runs the tests, builds the Mini App and runs
+`tgcloud push`, given a `TGCLOUD_TOKEN` repository secret (the project token
+from @BotFather → Bot → Serverless). By hand, from the project root:
 
 ```
 npm ci
 npx tgcloud login     # once per machine
-npx tgcloud push
+npm run deploy        # vite build && tgcloud push
 ```
 
 Always run `npm ci` first. The CLI is the pinned `@tgcloud/cli` dev

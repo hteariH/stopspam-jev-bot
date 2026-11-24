@@ -58,8 +58,14 @@ jobs:
         if: steps.secrets.outputs.ready == 'true'
         run: npm ci
 
-      # Pushes code only. Database schema changes are never applied from CI:
-      # `npx tgcloud migrate` is run by hand, after reading what it will do.
+      # push never builds, and the static site comes from dist/.
+      - name: Build the Mini App
+        if: steps.secrets.outputs.ready == 'true'
+        run: npm run build
+
+      # Pushes the modules and the Mini App in dist/. Database schema changes
+      # are never applied from CI: `npx tgcloud migrate` is run by hand, after
+      # reading what it will do.
       # --force because CI is the source of truth for what is deployed.
       - name: Push modules
         if: steps.secrets.outputs.ready == 'true'
